@@ -1221,6 +1221,8 @@ async def chat_completion(request: ChatCompletionRequest, db: AsyncSession = Dep
                             request.model,
                             enhanced_params
                         ):
+                            if isinstance(chunk, dict) and "error" in chunk:
+                                raise RuntimeError(chunk["error"])
                             # Extract content from the chunk
                             content = ""
                             if "choices" in chunk and len(chunk["choices"]) > 0:
@@ -1317,6 +1319,11 @@ async def chat_completion(request: ChatCompletionRequest, db: AsyncSession = Dep
                 request.model,
                 enhanced_params
             )
+            if isinstance(result, dict) and result.get("error"):
+                raise HTTPException(
+                    status_code=502,
+                    detail=f"Provider error: {result['error']}"
+                )
             elapsed_time = time.time() - start_time
             
             print(f"Chat completion result: {result}")
@@ -1328,6 +1335,13 @@ async def chat_completion(request: ChatCompletionRequest, db: AsyncSession = Dep
                     response_content = result["choices"][0]["message"].get("content", "")
                 elif "text" in result["choices"][0]:
                     response_content = result["choices"][0]["text"]
+            if not response_content and isinstance(result, dict):
+                if isinstance(result.get("content"), str):
+                    response_content = result["content"]
+                elif isinstance(result.get("message"), dict):
+                    response_content = result["message"].get("content", "")
+                elif isinstance(result.get("text"), str):
+                    response_content = result["text"]
             
             # Estimate token count (this is a rough estimate)
             token_count = len(response_content.split()) * 1.3  # Rough estimate: words * 1.3
