@@ -18,11 +18,18 @@ class OpenRouterProvider(AIProvider):
         self.api_key = config.get("api_key", "")
         self.base_url = "https://openrouter.ai/api/v1"
         self.server_name = config.get("server_name", "OpenRouter API")
+        client_headers = {
+            "HTTP-Referer": config.get("client_referer", "https://app.braindrive.ai"),
+            "X-Title": config.get("client_title", "BrainDrive Chat")
+        }
+        # Remove headers that were explicitly set to None/empty
+        default_headers = {key: value for key, value in client_headers.items() if value}
         
         # Initialize the OpenAI client with OpenRouter configuration
         client_kwargs = {
             "api_key": self.api_key,
-            "base_url": self.base_url
+            "base_url": self.base_url,
+            "default_headers": default_headers or None
         }
             
         self.client = AsyncOpenAI(**client_kwargs)
@@ -269,6 +276,8 @@ class OpenRouterProvider(AIProvider):
         max_tokens = payload_params.pop("max_tokens", None)
         temperature = payload_params.pop("temperature", None)
         top_p = payload_params.pop("top_p", None)
+        payload_params.pop("context_window", None)
+        payload_params.pop("stop_sequences", None)
         
         # Build the API parameters
         api_params = {
@@ -305,11 +314,7 @@ class OpenRouterProvider(AIProvider):
                 }
             }
         except Exception as e:
-            return {
-                "error": str(e),
-                "provider": "openrouter",
-                "model": model
-            }
+            raise RuntimeError(f"OpenRouter chat completion failed: {e}") from e
     
     async def chat_completion_stream(self, messages: List[Dict[str, Any]], model: str, params: Dict[str, Any]) -> AsyncGenerator[Dict[str, Any], None]:
         """
@@ -333,6 +338,8 @@ class OpenRouterProvider(AIProvider):
         max_tokens = payload_params.pop("max_tokens", None)
         temperature = payload_params.pop("temperature", None)
         top_p = payload_params.pop("top_p", None)
+        payload_params.pop("context_window", None)
+        payload_params.pop("stop_sequences", None)
         
         # Build the API parameters
         api_params = {
@@ -372,11 +379,7 @@ class OpenRouterProvider(AIProvider):
                         }
                     }
         except Exception as e:
-            yield {
-                "error": str(e),
-                "provider": "openrouter",
-                "model": model
-            }
+            raise RuntimeError(f"OpenRouter streaming chat failed: {e}") from e
     
     async def validate_connection(self, config: Dict[str, Any]) -> Dict[str, Any]:
         """Validate connection to OpenRouter."""
