@@ -209,6 +209,8 @@ patches/
 # Documentation and Reports
 docs/
 Docs/
+/docs
+/Docs
 **/docs/
 **/Docs/
 reports/
