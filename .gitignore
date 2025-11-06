@@ -218,6 +218,19 @@ reports/
 Reports/
 **/Reports/
 
+
+
+# Design assets
+design/
+Design/
+**/design/
+**/Design/
+**/design
+**/Design
+
+
+
+
 # Plugin Workspace
 PluginBuild/
 Template/
