@@ -21,6 +21,7 @@ from app.models.settings import SettingDefinition, SettingInstance
 from app.models.message import Message
 from app.models.role import Role
 from app.models.tenant_models import Tenant, UserRole, TenantUser, RolePermission, Session, OAuthAccount
+from app.models.job import Job, JobTypeDefinition
 
 
 # Define User relationships
@@ -33,6 +34,7 @@ User.modules = relationship("Module", back_populates="user", lazy="selectin")
 User.components = relationship("Component", back_populates="user", lazy="selectin")
 User.personas = relationship("Persona", back_populates="user", lazy="selectin")
 User.plugin_states = relationship("PluginState", back_populates="user", lazy="selectin")
+User.jobs = relationship("Job", back_populates="user", lazy="selectin")
 
 # Define Page relationships
 Page.creator = relationship("User", back_populates="pages")
@@ -44,3 +46,6 @@ NavigationRoute.default_page = relationship("Page", foreign_keys="NavigationRout
 
 # Define Persona relationships
 Persona.user = relationship("User", back_populates="personas")
+
+# Job relationships
+Tenant.jobs = relationship("Job", back_populates="workspace", lazy="selectin")

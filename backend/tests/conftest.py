@@ -3,19 +3,62 @@ import os
 import pytest
 import pytest_asyncio
 from fastapi.testclient import TestClient
-from httpx import AsyncClient
+from httpx import AsyncClient, ASGITransport
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 from typing import AsyncGenerator, Generator
+import types
 
 # Add the backend directory to the Python path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+if "groq" not in sys.modules:
+    class _AsyncGroqStub:
+        def __init__(self, *args, **kwargs):
+            async def _empty_models():
+                return types.SimpleNamespace(data=[])
+
+            async def _create_completion(*args, **kwargs):
+                if kwargs.get("stream"):
+                    async def _iterator():
+                        yield types.SimpleNamespace(
+                            choices=[types.SimpleNamespace(delta=types.SimpleNamespace(content=None), finish_reason="stop")],
+                            id="stub-stream",
+                        )
+
+                    return _iterator()
+                return types.SimpleNamespace(
+                    choices=[types.SimpleNamespace(message=types.SimpleNamespace(content=""), finish_reason="stop")],
+                    usage=types.SimpleNamespace(prompt_tokens=0, completion_tokens=0, total_tokens=0),
+                    id="stub-response",
+                )
+
+            self.models = types.SimpleNamespace(list=_empty_models)
+            self.chat = types.SimpleNamespace(completions=types.SimpleNamespace(create=_create_completion))
+
+    sys.modules["groq"] = types.SimpleNamespace(AsyncGroq=_AsyncGroqStub)
+
+if "PyPDF2" not in sys.modules:
+    class _PdfReaderStub:
+        def __init__(self, *args, **kwargs):
+            self.pages = []
+
+    sys.modules["PyPDF2"] = types.SimpleNamespace(PdfReader=_PdfReaderStub)
 
 # Override settings for testing
 os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///./test.db"
 os.environ["ENVIRONMENT"] = "test"
 
 from app.core.config import settings
+
+if not hasattr(settings, "cors_origins_list"):
+    object.__setattr__(settings, "cors_origins_list", settings.CORS_ORIGINS or [])
+if not hasattr(settings, "cors_methods_list"):
+    object.__setattr__(settings, "cors_methods_list", settings.CORS_METHODS or [])
+if not hasattr(settings, "cors_headers_list"):
+    object.__setattr__(settings, "cors_headers_list", settings.CORS_HEADERS or [])
+if not hasattr(settings, "cors_expose_headers_list"):
+    object.__setattr__(settings, "cors_expose_headers_list", settings.CORS_EXPOSE_HEADERS or [])
 from app.models import Base  # Import all models so tables are created
 from app.core.database import Base as DBBase
 from app.main import app
@@ -56,7 +99,24 @@ def client() -> Generator:
         c.cookies.jar.clear()  # Clear any existing cookies
         yield c
 
+class _LifespanManager:
+    def __init__(self, application):
+        self.app = application
+        self._context = None
+
+    async def __aenter__(self):
+        self._context = self.app.router.lifespan_context(self.app)
+        await self._context.__aenter__()
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        if self._context is not None:
+            await self._context.__aexit__(exc_type, exc, tb)
+
+
 @pytest_asyncio.fixture
 async def async_client() -> AsyncGenerator[AsyncClient, None]:
-    async with AsyncClient(app=app, base_url="http://test") as ac:
-        yield ac
+    async with _LifespanManager(app):
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+            yield ac

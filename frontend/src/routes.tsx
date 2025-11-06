@@ -6,6 +6,7 @@ import { PluginInstallerPage } from './features/plugin-installer';
 import DashboardLayout from './components/dashboard/DashboardLayout';
 import ModuleDetailPage from './pages/ModuleDetailPage';
 import ProfilePage from './pages/ProfilePage';
+import TasksPage from './pages/TasksPage';
 import PersonasPage from './pages/PersonasPage';
 import PersonaFormPage from './pages/PersonaFormPage';
 import { DynamicRoutes } from './components/DynamicRoutes';
@@ -39,6 +40,7 @@ function AppRoutes() {
         <Route path="dashboard" element={<RouteContentRenderer route="dashboard" />} />
         <Route path="plugin-studio" element={<RouteContentRenderer route="plugin-studio" />} />
         <Route path="settings" element={<RouteContentRenderer route="settings" />} />
+        <Route path="tasks" element={<TasksPage />} />
         <Route path="profile" element={<ProfilePage />} />
         <Route path="plugin-manager" element={<RouteContentRenderer route="plugin-manager" />} />
         <Route path="plugin-manager/:pluginId/:moduleId" element={<ModuleDetailPage />} />
