@@ -21,6 +21,9 @@ export interface LayoutEngineBaseProps {
   onItemRemove?: (itemId: string) => void;
   onItemSelect?: (itemId: string) => void;
   onItemConfig?: (itemId: string) => void;
+  canvasScale?: number;
+  canvasWidth?: number;
+  canvasHeight?: number;
 }
 
 const defaultGridConfig = {
@@ -43,6 +46,9 @@ export const LayoutEngineBase: React.FC<LayoutEngineBaseProps> = React.memo(({
   onItemRemove,
   onItemSelect,
   onItemConfig,
+  canvasScale,
+  canvasWidth,
+  canvasHeight,
 }) => {
   // Debug: Track component re-renders
   const layoutEngineRenderCount = useRef(0);
@@ -739,6 +745,10 @@ export const LayoutEngineBase: React.FC<LayoutEngineBaseProps> = React.memo(({
   ]);
 
   // Grid layout props - convert ResponsiveLayouts to react-grid-layout Layouts format
+  const effectiveCanvasScale = mode === RenderMode.STUDIO ? (canvasScale ?? 1) : 1;
+  const logicalWidth = mode === RenderMode.STUDIO ? canvasWidth : undefined;
+  const logicalHeight = mode === RenderMode.STUDIO ? canvasHeight : undefined;
+
   const gridProps = useMemo(() => {
     // Convert ResponsiveLayouts to the format expected by react-grid-layout
     const reactGridLayouts: any = {};
@@ -773,10 +783,10 @@ export const LayoutEngineBase: React.FC<LayoutEngineBaseProps> = React.memo(({
       preventCollision: false,
       allowOverlap: false,
       measureBeforeMount: false,
-      transformScale: 1,
+      transformScale: effectiveCanvasScale,
       ...defaultGridConfig,
     };
-  }, [currentLayouts, mode, handleLayoutChange, handleDragStart, handleDragStop, handleResizeStart, handleResizeStop]);
+  }, [currentLayouts, mode, handleLayoutChange, handleDragStart, handleDragStop, handleResizeStart, handleResizeStop, effectiveCanvasScale]);
 
   // Memoize the rendered grid items with minimal stable dependencies
   const gridItems = useMemo(() => {
@@ -804,16 +814,41 @@ export const LayoutEngineBase: React.FC<LayoutEngineBaseProps> = React.memo(({
     // These don't affect the core rendering logic and cause unnecessary recalculations
   ]);
 
+  const wrapperStyle = useMemo<React.CSSProperties>(() => {
+    const style: React.CSSProperties = {};
+    if (logicalWidth) {
+      style.width = logicalWidth;
+      style.minWidth = logicalWidth;
+    }
+    if (logicalHeight) {
+      style.minHeight = logicalHeight;
+    }
+    if (effectiveCanvasScale !== 1) {
+      style.transform = `scale(${effectiveCanvasScale})`;
+      style.transformOrigin = 'top left';
+    }
+    return style;
+  }, [logicalWidth, logicalHeight, effectiveCanvasScale]);
+
+  useEffect(() => {
+    if (mode === RenderMode.STUDIO && effectiveCanvasScale !== 1) {
+      window.dispatchEvent(new Event('resize'));
+    }
+  }, [mode, effectiveCanvasScale, logicalWidth, logicalHeight]);
+
   return (
     <div
       className={`layout-engine-container ${isDragging ? 'layout-engine-container--dragging' : ''} ${isResizing ? 'layout-engine-container--resizing' : ''} ${isDragOver ? 'layout-engine-container--drag-over' : ''}`}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
+      style={{ overflow: 'auto' }}
     >
-      <ResponsiveGridLayout {...gridProps}>
-        {gridItems}
-      </ResponsiveGridLayout>
+      <div style={wrapperStyle}>
+        <ResponsiveGridLayout {...gridProps}>
+          {gridItems}
+        </ResponsiveGridLayout>
+      </div>
     </div>
   );
 }, (prevProps, nextProps) => {
@@ -826,7 +861,10 @@ export const LayoutEngineBase: React.FC<LayoutEngineBaseProps> = React.memo(({
   if (
     prevProps.mode !== nextProps.mode ||
     prevProps.lazyLoading !== nextProps.lazyLoading ||
-    prevProps.pageId !== nextProps.pageId
+    prevProps.pageId !== nextProps.pageId ||
+    prevProps.canvasScale !== nextProps.canvasScale ||
+    prevProps.canvasWidth !== nextProps.canvasWidth ||
+    prevProps.canvasHeight !== nextProps.canvasHeight
   ) {
     if (process.env.NODE_ENV === 'development') {
       console.log('[LayoutEngine] MEMO COMPARISON - Primitive props changed, re-rendering');

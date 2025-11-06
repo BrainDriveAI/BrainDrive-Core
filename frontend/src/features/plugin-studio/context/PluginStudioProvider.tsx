@@ -1,11 +1,13 @@
-import React, { useState, useMemo } from 'react';
+import React, { useEffect, useState, useMemo } from 'react';
 import { PluginStudioContext } from './PluginStudioContext';
 import { usePages } from '../hooks/page/usePages';
 import { useLayout } from '../hooks/layout/useLayout';
 import { useViewMode } from '../hooks/ui/useViewMode';
+import { useCanvas } from '../hooks/ui/useCanvas';
 import { usePlugins } from '../hooks/plugin/usePlugins';
 import { PluginProvider } from '../../../contexts/PluginContext';
 import { ToolbarProvider } from './ToolbarContext';
+import { DEFAULT_CANVAS_CONFIG } from '../constants/canvas.constants';
 
 /**
  * Provider component for the PluginStudio context
@@ -62,6 +64,17 @@ export const PluginStudioProvider: React.FC<{ children: React.ReactNode }> = ({ 
     previewMode,
     togglePreviewMode
   } = useViewMode();
+
+  // Canvas + zoom state (initialize from current page if present)
+  const { canvas, setCanvas, zoom, setZoom, zoomIn, zoomOut } = useCanvas(currentPage?.canvas || DEFAULT_CANVAS_CONFIG);
+
+  // Keep currentPage.canvas in sync (non-persistent until savePage)
+  useEffect(() => {
+    if (currentPage) {
+      currentPage.canvas = { ...canvas };
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [canvas, currentPage?.id]);
   
   // Plugin state
   const { availablePlugins } = usePlugins();
@@ -108,6 +121,14 @@ export const PluginStudioProvider: React.FC<{ children: React.ReactNode }> = ({ 
     previewMode,
     togglePreviewMode,
     
+    // Canvas state
+    canvas,
+    setCanvas,
+    zoom,
+    setZoom,
+    zoomIn,
+    zoomOut,
+    
     // Selection state
     selectedItem,
     setSelectedItem,
@@ -146,7 +167,10 @@ export const PluginStudioProvider: React.FC<{ children: React.ReactNode }> = ({ 
     configDialogOpen, jsonViewOpen, pageManagementOpen, routeManagementOpen,
     
     // Loading state
-    isLoading, error
+    isLoading, error,
+    
+    // Canvas state
+    canvas, setCanvas, zoom, setZoom, zoomIn, zoomOut
   ]);
   
   return (

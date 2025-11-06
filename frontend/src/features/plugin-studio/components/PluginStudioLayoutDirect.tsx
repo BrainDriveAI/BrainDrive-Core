@@ -44,6 +44,8 @@ export const PluginStudioLayoutDirect: React.FC = () => {
     selectedItem,
     setSelectedItem,
     previewMode,
+    zoom,
+    canvas,
     
     // Dialog state
     configDialogOpen,
@@ -237,6 +239,9 @@ export const PluginStudioLayoutDirect: React.FC = () => {
               pageData={unifiedPageData}
               mode={previewMode ? RenderMode.PREVIEW : RenderMode.STUDIO}
               responsive={true}
+              studioScale={zoom}
+              studioCanvasWidth={canvas?.width}
+              studioCanvasHeight={canvas?.height}
               onLayoutChange={(layouts) => {
                 console.log('[PluginStudioLayoutDirect] UnifiedPageRenderer onLayoutChange called with:', layouts);
                 handleUnifiedLayoutChange(layouts);

@@ -3,6 +3,7 @@ import { Page, CreatePageParams, UpdatePageParams, PageHierarchyParams } from '.
 import { pageService } from '../../../../services/pageService';
 import { normalizeObjectKeys } from '../../../../utils/caseConversion';
 import { usePageState } from '../../../../contexts/PageStateContext';
+import { DEFAULT_CANVAS_CONFIG } from '../../constants/canvas.constants';
 
 /**
  * Custom hook for managing pages
@@ -47,7 +48,8 @@ export const usePages = () => {
               const normalized = normalizeObjectKeys(page.content.modules);
               console.log('usePages - After normalization:', normalized);
               return normalized;
-            })() : {}
+            })() : {},
+            canvas: page.content?.canvas || { ...DEFAULT_CANVAS_CONFIG }
           };
           
           // Ensure the layouts property is synchronized with content.layouts
@@ -111,19 +113,20 @@ export const usePages = () => {
       // Create a unique route by adding a timestamp
       const uniquePageSlug = `${pageName.toLowerCase().replace(/\s+/g, '-')}-${Date.now()}`;
       
-      const createParams: CreatePageParams = {
-        name: pageName,
-        route: uniquePageSlug,
-        description: '',
-        content: {
-          layouts: {
-            desktop: [],
-            tablet: [],
-            mobile: []
-          },
-          modules: {}
-        }
-      };
+        const createParams: CreatePageParams = {
+          name: pageName,
+          route: uniquePageSlug,
+          description: '',
+          content: {
+            layouts: {
+              desktop: [],
+              tablet: [],
+              mobile: []
+            },
+            modules: {},
+            canvas: { ...DEFAULT_CANVAS_CONFIG }
+          }
+        };
       
       // Create a new page in the backend
       const newPage = await pageService.createPage(createParams);
@@ -137,7 +140,8 @@ export const usePages = () => {
           tablet: [],
           mobile: []
         },
-        modules: newPage.content?.modules ? normalizeObjectKeys(newPage.content.modules) : {}
+        modules: newPage.content?.modules ? normalizeObjectKeys(newPage.content.modules) : {},
+        canvas: newPage.content?.canvas || { ...DEFAULT_CANVAS_CONFIG }
       };
       
       // Log to verify all fields are preserved
@@ -167,6 +171,7 @@ export const usePages = () => {
           mobile: []
         },
         modules: {},
+        canvas: { ...DEFAULT_CANVAS_CONFIG },
         route: pageName.toLowerCase().replace(/\s+/g, '-'),
         route_segment: pageName.toLowerCase().replace(/\s+/g, '-'),
         parent_route: '',
@@ -180,7 +185,8 @@ export const usePages = () => {
             tablet: [],
             mobile: []
           },
-          modules: {}
+          modules: {},
+          canvas: { ...DEFAULT_CANVAS_CONFIG }
         }
       };
       
@@ -324,7 +330,8 @@ export const usePages = () => {
           description: currentPage.description || '',
           content: {
             layouts: layoutsForNewPage,
-            modules: currentPage.modules
+            modules: currentPage.modules,
+            canvas: currentPage.canvas
           }
         });
         
@@ -363,7 +370,8 @@ export const usePages = () => {
         // Create deep clones to avoid reference issues
         const content = {
           layouts: JSON.parse(JSON.stringify(layoutsToSave)),
-          modules: JSON.parse(JSON.stringify(currentPage.modules || {}))
+          modules: JSON.parse(JSON.stringify(currentPage.modules || {})),
+          canvas: JSON.parse(JSON.stringify(currentPage.canvas || {}))
         };
         
         // Phase 5: Enhanced logging for save serialization tracking

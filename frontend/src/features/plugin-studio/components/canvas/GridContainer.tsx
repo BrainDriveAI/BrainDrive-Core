@@ -18,6 +18,9 @@ interface GridContainerProps {
   viewMode: ViewModeState;
   viewWidth: number;
   newItemId?: string | null;
+  canvasWidth: number;
+  canvasHeight: number;
+  zoom?: number;
 }
 
 /**
@@ -32,11 +35,23 @@ export const GridContainer: React.FC<GridContainerProps> = ({
   onResizeStop,
   viewMode,
   viewWidth,
-  newItemId = null
+  newItemId = null,
+  canvasWidth,
+  canvasHeight,
+  zoom = 1
 }) => {
   const { selectedItem, setSelectedItem, previewMode } = usePluginStudio();
   const interactionSourceRef = React.useRef<'user-drag' | 'user-resize' | 'drop-add' | null>(null);
   const interactionResetTimeoutRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const effectiveWidth = (viewMode.type === 'desktop' || viewMode.type === 'custom') ? canvasWidth : viewWidth;
+  const scaledWidth = effectiveWidth * zoom;
+  const scaledHeight = Math.max(400, canvasHeight) * zoom;
+
+  React.useEffect(() => {
+    // Inform react-grid-layout that available width changed so it recalculates column sizes
+    window.dispatchEvent(new Event('resize'));
+  }, [scaledWidth]);
 
   const cancelInteractionReset = React.useCallback(() => {
     if (interactionResetTimeoutRef.current) {
@@ -192,43 +207,51 @@ export const GridContainer: React.FC<GridContainerProps> = ({
   return (
     <Box
       sx={{
-        minHeight: 400,
-        width: viewWidth,
-        maxWidth: '100%',
-        mx: 'auto'
+        minHeight: scaledHeight,
+        width: scaledWidth,
+        maxWidth: 'none',
+        mx: 'auto',
       }}
     >
-      <ResponsiveGridLayout
-        className="layout"
-        layouts={convertedLayouts}
-        breakpoints={{
-          desktop: VIEW_MODE_LAYOUTS.desktop.cols,
-          tablet: VIEW_MODE_LAYOUTS.tablet.cols,
-          mobile: VIEW_MODE_LAYOUTS.mobile.cols
+      <Box
+        sx={{
+          transform: `scale(${zoom})`,
+          transformOrigin: 'top left',
+          width: effectiveWidth,
+          minHeight: Math.max(400, canvasHeight),
         }}
-        cols={{
-          desktop: VIEW_MODE_COLS.desktop,
-          tablet: VIEW_MODE_COLS.tablet,
-          mobile: VIEW_MODE_COLS.mobile
-        }}
-        rowHeight={currentViewModeConfig.rowHeight}
-        margin={currentViewModeConfig.margin}
-        containerPadding={currentViewModeConfig.padding}
-        onLayoutChange={handleLayoutChange}
-        onResizeStart={handleResizeStartInternal}
-        onResizeStop={handleResizeStopInternal}
-        onDragStart={handleDragStart}
-        onDragStop={handleDragStop}
-        isDraggable={!previewMode}
-        isResizable={!previewMode}
-        compactType="vertical"
-        useCSSTransforms={true}
-        draggableHandle=".react-grid-dragHandleExample"
-        preventCollision={false}
-        allowOverlap={false}
-        measureBeforeMount={false}
-        transformScale={1}
       >
+        <ResponsiveGridLayout
+          className="layout"
+          layouts={convertedLayouts}
+          breakpoints={{
+            desktop: VIEW_MODE_LAYOUTS.desktop.cols,
+            tablet: VIEW_MODE_LAYOUTS.tablet.cols,
+            mobile: VIEW_MODE_LAYOUTS.mobile.cols
+          }}
+          cols={{
+            desktop: VIEW_MODE_COLS.desktop,
+            tablet: VIEW_MODE_COLS.tablet,
+            mobile: VIEW_MODE_COLS.mobile
+          }}
+          rowHeight={currentViewModeConfig.rowHeight}
+          margin={currentViewModeConfig.margin}
+          containerPadding={currentViewModeConfig.padding}
+          onLayoutChange={handleLayoutChange}
+          onResizeStart={handleResizeStartInternal}
+          onResizeStop={handleResizeStopInternal}
+          onDragStart={handleDragStart}
+          onDragStop={handleDragStop}
+          isDraggable={!previewMode}
+          isResizable={!previewMode}
+          compactType="vertical"
+          useCSSTransforms={true}
+          draggableHandle=".react-grid-dragHandleExample"
+          preventCollision={false}
+          allowOverlap={false}
+          measureBeforeMount={false}
+          transformScale={zoom}
+        >
         {currentLayout
           .filter(item => item && item.i && typeof item.y === 'number' && typeof item.x === 'number' &&
                   typeof item.w === 'number' && typeof item.h === 'number') // Filter out invalid items and ensure all required properties exist
@@ -250,7 +273,8 @@ export const GridContainer: React.FC<GridContainerProps> = ({
               </div>
             );
           })}
-      </ResponsiveGridLayout>
+        </ResponsiveGridLayout>
+      </Box>
     </Box>
   );
 };

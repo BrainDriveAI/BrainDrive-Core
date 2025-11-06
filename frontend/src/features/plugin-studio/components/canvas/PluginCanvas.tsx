@@ -12,7 +12,7 @@ import { LayoutCommitBadge } from '../../../unified-dynamic-page-renderer/compon
  * @returns The plugin canvas component
  */
 export const PluginCanvas: React.FC = () => {
-  const { layouts, handleLayoutChange, handleResizeStart, handleResizeStop, currentPage, savePage } = usePluginStudio();
+  const { layouts, handleLayoutChange, handleResizeStart, handleResizeStop, currentPage, savePage, canvas, zoom } = usePluginStudio();
   const { viewMode, viewWidth, setContainerWidth } = useViewMode();
   const containerRef = useRef<HTMLDivElement>(null);
   const [saveSuccess, setSaveSuccess] = useState(false);
@@ -62,6 +62,9 @@ export const PluginCanvas: React.FC = () => {
             viewMode={viewMode}
             viewWidth={viewWidth}
             newItemId={newItemId}
+            canvasWidth={canvas.width}
+            canvasHeight={canvas.height}
+            zoom={zoom}
           />
         </DropZone>
       </Box>

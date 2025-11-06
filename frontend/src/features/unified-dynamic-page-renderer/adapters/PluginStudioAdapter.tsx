@@ -46,6 +46,13 @@ export interface PluginStudioAdapterProps {
   enableUnifiedFeatures?: boolean;
   fallbackToLegacy?: boolean;
   performanceMonitoring?: boolean;
+
+  // Studio canvas state
+  zoom?: number;
+  canvas?: {
+    width?: number;
+    height?: number;
+  };
 }
 
 /**
@@ -70,12 +77,18 @@ export const PluginStudioAdapter: React.FC<PluginStudioAdapterProps> = ({
   setSelectedItem,
   enableUnifiedFeatures = true,
   fallbackToLegacy = false,
-  performanceMonitoring = import.meta.env.MODE === 'development'
+  performanceMonitoring = import.meta.env.MODE === 'development',
+  zoom = 1,
+  canvas,
 }) => {
   // Get Material-UI theme for dark mode support
   const theme = useTheme();
   // Get dev mode features - MUST be called before any conditional returns
   const { features: devModeFeatures } = usePluginStudioDevMode();
+  const DEFAULT_CANVAS_WIDTH = 1440;
+  const DEFAULT_CANVAS_HEIGHT = 2400;
+  const canvasWidth = canvas?.width ?? DEFAULT_CANVAS_WIDTH;
+  const canvasHeight = canvas?.height ?? DEFAULT_CANVAS_HEIGHT;
   
   // Phase 1: Add debug mode flag
   const isDebugMode = import.meta.env.VITE_LAYOUT_DEBUG === 'true';
@@ -703,11 +716,21 @@ export const PluginStudioAdapter: React.FC<PluginStudioAdapterProps> = ({
       <GridToolbar onSave={handleSave} />
       
       {/* Use the full UnifiedPageRenderer but hide the mode controller with CSS */}
-      <div
-        style={{ height: '100%', width: '100%', flex: 1, overflow: 'hidden' }}
-      >
+      <div className="plugin-studio-adapter__canvas">
         <style>
           {`
+            .plugin-studio-adapter__canvas {
+              flex: 1;
+              position: relative;
+              overflow: hidden;
+            }
+
+            .plugin-studio-adapter__canvas-inner {
+              position: absolute;
+              inset: 0;
+              overflow: auto;
+            }
+
             /* Hide the unified renderer mode controller and editing tools */
             .unified-page-renderer .mode-controller,
             .unified-page-renderer .studio-mode-controller,
@@ -719,14 +742,15 @@ export const PluginStudioAdapter: React.FC<PluginStudioAdapterProps> = ({
               display: none !important;
             }
 
-            /* Ensure unified container never exceeds its parent width */
-            .unified-page-renderer,
-            .unified-page-renderer .layout-engine,
-            .unified-page-renderer .responsive-container {
+            /* Ensure unified container never exceeds its parent width within studio */
+            .plugin-studio-adapter .unified-page-renderer,
+            .plugin-studio-adapter .unified-page-renderer .layout-engine,
+            .plugin-studio-adapter .unified-page-renderer .responsive-container {
               height: 100% !important;
-              width: 100% !important;
-              max-width: 100% !important;
-              overflow-x: hidden !important;
+              width: ${canvasWidth}px !important;
+              min-width: ${canvasWidth}px !important;
+              max-width: none !important;
+              overflow: auto !important;
             }
 
             /* Create expandable grid background like legacy Plugin Studio - Theme aware */
@@ -750,10 +774,10 @@ export const PluginStudioAdapter: React.FC<PluginStudioAdapterProps> = ({
 
             /* Ensure the grid container can expand beyond viewport */
             .unified-page-renderer .react-grid-layout {
-              min-height: 100vh !important;
+              min-height: ${canvasHeight}px !important;
               position: relative !important;
-              width: 100% !important;
-              max-width: 100% !important;
+              width: ${canvasWidth}px !important;
+              min-width: ${canvasWidth}px !important;
               overflow-x: hidden !important;
             }
 
@@ -952,22 +976,29 @@ export const PluginStudioAdapter: React.FC<PluginStudioAdapterProps> = ({
           `}
         </style>
         
-        <UnifiedPageRenderer
-          pageData={convertedPageData}
-          mode={renderMode}
-          allowUnpublished={true}
-          responsive={true}
-          // Plugin Studio editing: disable container queries to avoid accidental
-          // breakpoint flips on first interaction due to container reflow.
-          containerQueries={false}
-          lazyLoading={true}
-          onPageLoad={handleUnifiedPageLoad}
-          onLayoutChange={handleUnifiedLayoutChange}
-          onItemSelect={handleUnifiedModuleSelect}
-          onItemConfig={handleModuleConfig}
-          onItemRemove={handleModuleDelete}
-          onError={onError}
-        />
+        <div style={{ flex: 1, overflow: 'auto' }}>
+        <div className="plugin-studio-adapter__canvas-inner">
+          <UnifiedPageRenderer
+            pageData={convertedPageData}
+            mode={renderMode}
+            allowUnpublished={true}
+            responsive={true}
+            // Plugin Studio editing: disable container queries to avoid accidental
+            // breakpoint flips on first interaction due to container reflow.
+            containerQueries={false}
+            lazyLoading={true}
+            onPageLoad={handleUnifiedPageLoad}
+            onLayoutChange={handleUnifiedLayoutChange}
+            onItemSelect={handleUnifiedModuleSelect}
+            onItemConfig={handleModuleConfig}
+            onItemRemove={handleModuleDelete}
+            onError={onError}
+            studioScale={zoom}
+            studioCanvasWidth={canvasWidth}
+            studioCanvasHeight={canvasHeight}
+          />
+        </div>
+      </div>
       </div>
 
       {/* Performance overlay in development */}

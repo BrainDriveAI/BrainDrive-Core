@@ -1,5 +1,6 @@
 import { createContext } from 'react';
 import { Page, Layouts, ViewModeState, DynamicPluginConfig, GridItem, LayoutItem } from '../types';
+import { CanvasConfig } from '../types/page.types';
 
 /**
  * Interface for the PluginStudio context
@@ -38,6 +39,14 @@ export interface PluginStudioContextType {
   setViewMode: (mode: ViewModeState) => void;
   previewMode: boolean;
   togglePreviewMode: () => void;
+
+  // Canvas state
+  canvas: CanvasConfig;
+  setCanvas: (config: CanvasConfig) => void;
+  zoom: number;
+  setZoom: (value: number | ((prev: number) => number)) => void;
+  zoomIn: () => void;
+  zoomOut: () => void;
   
   // Selection state
   selectedItem: { i: string } | null;

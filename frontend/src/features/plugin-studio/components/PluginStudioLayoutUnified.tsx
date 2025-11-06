@@ -33,6 +33,8 @@ export const PluginStudioLayoutUnified: React.FC = () => {
     previewMode,
     selectedItem,
     setSelectedItem,
+    zoom,
+    canvas,
     jsonViewOpen,
     setJsonViewOpen,
     configDialogOpen,
@@ -171,9 +173,7 @@ export const PluginStudioLayoutUnified: React.FC = () => {
       <Box sx={{ 
         flex: 1,
         position: 'relative',
-        // Prevent horizontal overflow/dead space while allowing vertical scroll
-        overflowY: 'auto',
-        overflowX: 'hidden',
+        overflow: 'hidden',
         width: '100%',
         maxWidth: '100%',
         minWidth: 0
@@ -195,6 +195,8 @@ export const PluginStudioLayoutUnified: React.FC = () => {
               setSelectedItem={setSelectedItem}
               enableUnifiedFeatures={true}
               performanceMonitoring={import.meta.env.MODE === 'development'}
+              zoom={zoom}
+              canvas={canvas}
             />
           ) : (
             // Fallback to Legacy Plugin Canvas

@@ -1,6 +1,16 @@
 import { Layouts } from './layout.types';
 import { ModuleDefinition } from './plugin.types';
 
+// Canvas configuration for Plugin Studio logical canvas
+export interface CanvasConfig {
+  width: number;      // logical width in px
+  height: number;     // logical height in px
+  minWidth?: number;
+  maxWidth?: number;
+  minHeight?: number;
+  maxHeight?: number;
+}
+
 /**
  * Page interface representing a page in the application
  */
@@ -14,6 +24,9 @@ export interface Page {
   
   // Module definitions
   modules?: Record<string, ModuleDefinition>;
+  
+  // Optional canvas configuration persisted with content
+  canvas?: CanvasConfig;
   
   // Breakpoints for responsive design
   defaultBreakpoints?: {
@@ -75,6 +88,7 @@ export interface CreatePageParams {
   content?: {
     layouts?: Layouts;
     modules?: Record<string, ModuleDefinition>;
+    canvas?: CanvasConfig;
   };
   parent_route?: string;
   parent_type?: string;
@@ -91,6 +105,7 @@ export interface UpdatePageParams {
   content?: {
     layouts?: Layouts;
     modules?: Record<string, ModuleDefinition>;
+    canvas?: CanvasConfig;
   };
   route?: string;
   parent_route?: string;

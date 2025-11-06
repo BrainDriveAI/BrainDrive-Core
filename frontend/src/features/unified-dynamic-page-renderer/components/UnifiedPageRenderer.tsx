@@ -31,6 +31,9 @@ export interface UnifiedPageRendererProps {
   // Performance options
   lazyLoading?: boolean;
   preloadPlugins?: string[];
+  studioScale?: number;
+  studioCanvasWidth?: number;
+  studioCanvasHeight?: number;
   
   // Event handlers
   onModeChange?: (mode: RenderMode) => void;
@@ -84,6 +87,9 @@ export const UnifiedPageRenderer: React.FC<UnifiedPageRendererProps> = ({
   onItemConfig,
   onItemRemove,
   onError,
+  studioScale = 1,
+  studioCanvasWidth,
+  studioCanvasHeight,
 }) => {
   // State management
   const [currentMode, setCurrentMode] = useState<RenderMode>(mode);
@@ -240,14 +246,24 @@ export const UnifiedPageRenderer: React.FC<UnifiedPageRendererProps> = ({
                   containerQueries={containerQueries}
                 >
                   {currentMode === RenderMode.STUDIO ? (
-                    <StudioLayoutEngine {...engineCommonProps} />
+                    <StudioLayoutEngine
+                      {...engineCommonProps}
+                      canvasScale={studioScale}
+                      canvasWidth={studioCanvasWidth}
+                      canvasHeight={studioCanvasHeight}
+                    />
                   ) : (
                     <DisplayLayoutEngine {...engineCommonProps} mode={currentMode} />
                   )}
                 </ResponsiveContainer>
               ) : (
                 currentMode === RenderMode.STUDIO ? (
-                  <StudioLayoutEngine {...engineCommonProps} />
+                  <StudioLayoutEngine
+                    {...engineCommonProps}
+                    canvasScale={studioScale}
+                    canvasWidth={studioCanvasWidth}
+                    canvasHeight={studioCanvasHeight}
+                  />
                 ) : (
                   <DisplayLayoutEngine {...engineCommonProps} mode={currentMode} />
                 )
