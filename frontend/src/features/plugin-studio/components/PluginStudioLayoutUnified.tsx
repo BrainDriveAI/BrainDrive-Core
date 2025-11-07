@@ -44,7 +44,8 @@ export const PluginStudioLayoutUnified: React.FC = () => {
     routeManagementOpen,
     setRouteManagementOpen,
     flushLayoutChanges, // Phase 3: Get flush method from context
-    setContainerWidth
+    setContainerWidth,
+    applyAutoZoom
   } = usePluginStudio();
 
   const mainContentRef = useRef<HTMLDivElement | null>(null);
@@ -218,6 +219,7 @@ export const PluginStudioLayoutUnified: React.FC = () => {
               performanceMonitoring={import.meta.env.MODE === 'development'}
               zoom={zoom}
               canvas={canvas}
+              onAutoFitScale={applyAutoZoom}
             />
           ) : (
             // Fallback to Legacy Plugin Canvas

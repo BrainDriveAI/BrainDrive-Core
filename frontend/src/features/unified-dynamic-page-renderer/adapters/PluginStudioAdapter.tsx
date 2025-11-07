@@ -53,6 +53,7 @@ export interface PluginStudioAdapterProps {
     width?: number;
     height?: number;
   };
+  onAutoFitScale?: (scale: number) => void;
 }
 
 /**
@@ -80,6 +81,7 @@ export const PluginStudioAdapter: React.FC<PluginStudioAdapterProps> = ({
   performanceMonitoring = import.meta.env.MODE === 'development',
   zoom = 1,
   canvas,
+  onAutoFitScale,
 }) => {
   // Get Material-UI theme for dark mode support
   const theme = useTheme();
@@ -109,6 +111,25 @@ export const PluginStudioAdapter: React.FC<PluginStudioAdapterProps> = ({
     renderTime?: number;
     lastUpdate: number;
   }>({ lastUpdate: Date.now() });
+  const canvasHostRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!onAutoFitScale) return;
+    const node = canvasHostRef.current;
+    if (!node) return;
+
+    const observer = new ResizeObserver(entries => {
+      const entry = entries[0];
+      if (!entry) return;
+      const width = entry.contentRect.width;
+      if (width > 0 && canvasWidth > 0) {
+        onAutoFitScale(width / canvasWidth);
+      }
+    });
+
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [onAutoFitScale, canvasWidth]);
 
 
   // Handle module selection from unified renderer
@@ -729,6 +750,11 @@ export const PluginStudioAdapter: React.FC<PluginStudioAdapterProps> = ({
               position: absolute;
               inset: 0;
               overflow: auto;
+              background-image:
+                linear-gradient(to right, ${theme.palette.mode === 'dark' ? '#424242' : '#d0d0d0'} 1px, transparent 1px),
+                linear-gradient(to bottom, ${theme.palette.mode === 'dark' ? '#424242' : '#d0d0d0'} 1px, transparent 1px);
+              background-size: 20px 20px;
+              background-color: ${theme.palette.mode === 'dark' ? '#1d2332' : '#f5f5f5'};
             }
 
             /* Hide the unified renderer mode controller and editing tools */
@@ -746,19 +772,27 @@ export const PluginStudioAdapter: React.FC<PluginStudioAdapterProps> = ({
             .plugin-studio-adapter .unified-page-renderer,
             .plugin-studio-adapter .unified-page-renderer .layout-engine,
             .plugin-studio-adapter .unified-page-renderer .responsive-container,
-            .plugin-studio-adapter .unified-page-renderer .layout-engine-container,
-            .plugin-studio-adapter .unified-page-renderer .layout-engine-center,
             .plugin-studio-adapter .unified-page-renderer .layout-engine-inner {
               height: 100% !important;
               width: 100% !important;
-              min-width: 100% !important;
               max-width: none !important;
-              overflow: auto !important;
             }
 
-            .plugin-studio-adapter .unified-page-renderer .layout-engine-inner > div[style*="width: ${canvasWidth}px"] {
+            .plugin-studio-adapter .unified-page-renderer .layout-engine-container {
+              height: 100% !important;
               width: 100% !important;
-              min-width: 100% !important;
+              overflow: visible !important;
+            }
+
+            .plugin-studio-adapter .unified-page-renderer .layout-engine-center {
+              justify-content: flex-start !important;
+              width: 100% !important;
+            }
+
+            .plugin-studio-adapter .unified-page-renderer .layout-engine-inner {
+              margin: 0 !important;
+              padding: 0 !important;
+              max-width: none !important;
             }
 
             /* Create expandable grid background like legacy Plugin Studio - Theme aware */
@@ -984,7 +1018,10 @@ export const PluginStudioAdapter: React.FC<PluginStudioAdapterProps> = ({
           `}
         </style>
         
-<div style={{ flex: 1, overflow: 'auto' }}>
+        <div
+          ref={canvasHostRef}
+          style={{ flex: 1, overflow: 'auto' }}
+        >
         <div className="plugin-studio-adapter__canvas-inner">
           <UnifiedPageRenderer
             pageData={convertedPageData}
