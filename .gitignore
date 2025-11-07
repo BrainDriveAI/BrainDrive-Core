@@ -206,17 +206,24 @@ tmp/
 # Patch files
 patches/
 
-# Documentation and Reports
-docs/
-Docs/
-/docs
-/Docs
-**/docs/
-**/Docs/
+# Reports
 reports/
 **/reports/
 Reports/
 **/Reports/
+
+
+
+# Design assets
+design/
+Design/
+**/design/
+**/Design/
+**/design
+**/Design
+
+
+
 
 # Plugin Workspace
 PluginBuild/
