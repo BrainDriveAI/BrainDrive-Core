@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Box, Switch, FormControlLabel, Tooltip } from '@mui/material';
 import { PluginToolbar } from './toolbar/PluginToolbar';
 import { usePluginStudio } from '../hooks/usePluginStudio';
@@ -43,8 +43,27 @@ export const PluginStudioLayoutUnified: React.FC = () => {
     setPageManagementOpen,
     routeManagementOpen,
     setRouteManagementOpen,
-    flushLayoutChanges // Phase 3: Get flush method from context
+    flushLayoutChanges, // Phase 3: Get flush method from context
+    setContainerWidth
   } = usePluginStudio();
+
+  const mainContentRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!mainContentRef.current) {
+      return;
+    }
+
+    const observer = new ResizeObserver(entries => {
+      const entry = entries[0];
+      if (entry) {
+        setContainerWidth(entry.contentRect.width);
+      }
+    });
+
+    observer.observe(mainContentRef.current);
+    return () => observer.disconnect();
+  }, [setContainerWidth]);
 
   // Wrapper function to match the adapter's expected signature
   // QUICK MITIGATION: Accept options parameter with layoutOverride
@@ -170,7 +189,9 @@ export const PluginStudioLayoutUnified: React.FC = () => {
       </Box>
       
       {/* Main Content Area */}
-      <Box sx={{ 
+      <Box
+        ref={mainContentRef}
+        sx={{ 
         flex: 1,
         position: 'relative',
         overflow: 'hidden',

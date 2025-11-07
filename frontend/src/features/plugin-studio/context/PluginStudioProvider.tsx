@@ -62,11 +62,38 @@ export const PluginStudioProvider: React.FC<{ children: React.ReactNode }> = ({ 
     viewMode,
     setViewMode,
     previewMode,
-    togglePreviewMode
+    togglePreviewMode,
+    containerWidth,
+    setContainerWidth,
+    viewWidth
   } = useViewMode();
 
   // Canvas + zoom state (initialize from current page if present)
-  const { canvas, setCanvas, zoom, setZoom, zoomIn, zoomOut } = useCanvas(currentPage?.canvas || DEFAULT_CANVAS_CONFIG);
+  const {
+    canvas,
+    setCanvas,
+    zoom,
+    setZoom,
+    zoomIn,
+    zoomOut,
+    zoomMode,
+    setZoomMode,
+    applyAutoZoom
+  } = useCanvas(currentPage?.canvas || DEFAULT_CANVAS_CONFIG);
+
+  // Auto-fit canvas width for desktop/custom modes when container width changes
+  useEffect(() => {
+    if (!canvas.width || !containerWidth) {
+      return;
+    }
+
+    if (viewMode.type !== 'desktop' && viewMode.type !== 'custom') {
+      return;
+    }
+
+    const nextZoom = containerWidth / canvas.width;
+    applyAutoZoom(nextZoom);
+  }, [canvas.width, containerWidth, viewMode.type, applyAutoZoom]);
 
   // Keep currentPage.canvas in sync (non-persistent until savePage)
   useEffect(() => {
@@ -120,6 +147,9 @@ export const PluginStudioProvider: React.FC<{ children: React.ReactNode }> = ({ 
     setViewMode,
     previewMode,
     togglePreviewMode,
+    viewWidth,
+    containerWidth,
+    setContainerWidth,
     
     // Canvas state
     canvas,
@@ -128,6 +158,9 @@ export const PluginStudioProvider: React.FC<{ children: React.ReactNode }> = ({ 
     setZoom,
     zoomIn,
     zoomOut,
+    zoomMode,
+    setZoomMode,
+    applyAutoZoom,
     
     // Selection state
     selectedItem,
@@ -158,7 +191,7 @@ export const PluginStudioProvider: React.FC<{ children: React.ReactNode }> = ({ 
     availablePlugins,
     
     // View mode state
-    viewMode, setViewMode, previewMode, togglePreviewMode,
+    viewMode, setViewMode, previewMode, togglePreviewMode, viewWidth, containerWidth, setContainerWidth,
     
     // Selection state
     selectedItem, setSelectedItem,
@@ -170,7 +203,7 @@ export const PluginStudioProvider: React.FC<{ children: React.ReactNode }> = ({ 
     isLoading, error,
     
     // Canvas state
-    canvas, setCanvas, zoom, setZoom, zoomIn, zoomOut
+    canvas, setCanvas, zoom, setZoom, zoomIn, zoomOut, zoomMode, setZoomMode, applyAutoZoom
   ]);
   
   return (

@@ -753,7 +753,7 @@ export const PluginStudioAdapter: React.FC<PluginStudioAdapterProps> = ({
               width: 100% !important;
               min-width: 100% !important;
               max-width: none !important;
-              overflow: visible !important;
+              overflow: auto !important;
             }
 
             .plugin-studio-adapter .unified-page-renderer .layout-engine-inner > div[style*="width: ${canvasWidth}px"] {
@@ -984,29 +984,29 @@ export const PluginStudioAdapter: React.FC<PluginStudioAdapterProps> = ({
           `}
         </style>
         
-        <div style={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
-          <div className="plugin-studio-adapter__canvas-inner">
-            <UnifiedPageRenderer
-              pageData={convertedPageData}
-              mode={renderMode}
-              allowUnpublished={true}
-              responsive={true}
-              // Plugin Studio editing: disable container queries to avoid accidental
-              // breakpoint flips on first interaction due to container reflow.
-              containerQueries={false}
-              lazyLoading={true}
-              onPageLoad={handleUnifiedPageLoad}
-              onLayoutChange={handleUnifiedLayoutChange}
-              onItemSelect={handleUnifiedModuleSelect}
-              onItemConfig={handleModuleConfig}
-              onItemRemove={handleModuleDelete}
-              onError={onError}
-              studioScale={zoom}
-              studioCanvasWidth={canvasWidth}
-              studioCanvasHeight={canvasHeight}
-            />
-          </div>
+<div style={{ flex: 1, overflow: 'auto' }}>
+        <div className="plugin-studio-adapter__canvas-inner">
+          <UnifiedPageRenderer
+            pageData={convertedPageData}
+            mode={renderMode}
+            allowUnpublished={true}
+            responsive={true}
+            // Plugin Studio editing: disable container queries to avoid accidental
+            // breakpoint flips on first interaction due to container reflow.
+            containerQueries={false}
+            lazyLoading={true}
+            onPageLoad={handleUnifiedPageLoad}
+            onLayoutChange={handleUnifiedLayoutChange}
+            onItemSelect={handleUnifiedModuleSelect}
+            onItemConfig={handleModuleConfig}
+            onItemRemove={handleModuleDelete}
+            onError={onError}
+            studioScale={zoom}
+            studioCanvasWidth={canvasWidth}
+            studioCanvasHeight={canvasHeight}
+          />
         </div>
+      </div>
       </div>
 
       {/* Performance overlay in development */}

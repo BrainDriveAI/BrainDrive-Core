@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { CanvasConfig } from '../../types/page.types';
 import { DEFAULT_CANVAS_CONFIG, ZOOM_LIMITS } from '../../constants/canvas.constants';
 
+export type ZoomMode = 'auto' | 'manual';
+
 export interface UseCanvasState {
   canvas: CanvasConfig;
   setCanvas: (config: CanvasConfig) => void;
@@ -9,6 +11,9 @@ export interface UseCanvasState {
   setZoom: (value: number | ((prev: number) => number)) => void;
   zoomIn: () => void;
   zoomOut: () => void;
+  zoomMode: ZoomMode;
+  setZoomMode: (mode: ZoomMode) => void;
+  applyAutoZoom: (value: number) => void;
 }
 
 /**
@@ -23,7 +28,9 @@ export const useCanvas = (initial?: Partial<CanvasConfig>): UseCanvasState => {
   const normalizedInitial = useMemo(() => normalize(initial), [normalize, initial]);
   const [canvas, setCanvasState] = useState<CanvasConfig>(normalizedInitial);
   const [zoom, setZoomState] = useState<number>(1);
+  const [zoomMode, setZoomModeState] = useState<ZoomMode>('auto');
   const lastInitialRef = useRef<string>(JSON.stringify(normalizedInitial));
+  const autoZoomRef = useRef<number>(1);
 
   // Clamp helper
   const clamp = useCallback((val: number, min: number, max: number) => Math.max(min, Math.min(max, val)), []);
@@ -48,8 +55,27 @@ export const useCanvas = (initial?: Partial<CanvasConfig>): UseCanvasState => {
     });
   }, [clamp]);
 
-  const zoomIn = useCallback(() => setZoom(prev => prev + ZOOM_LIMITS.step), [setZoom]);
-  const zoomOut = useCallback(() => setZoom(prev => prev - ZOOM_LIMITS.step), [setZoom]);
+  const zoomIn = useCallback(() => {
+    setZoomModeState('manual');
+    setZoom(prev => prev + ZOOM_LIMITS.step);
+  }, [setZoom]);
+
+  const zoomOut = useCallback(() => {
+    setZoomModeState('manual');
+    setZoom(prev => prev - ZOOM_LIMITS.step);
+  }, [setZoom]);
+
+  const setZoomMode = useCallback((mode: ZoomMode) => {
+    setZoomModeState(mode);
+  }, []);
+
+  const applyAutoZoom = useCallback((value: number) => {
+    const next = clamp(value, ZOOM_LIMITS.min, ZOOM_LIMITS.max);
+    autoZoomRef.current = next;
+    if (zoomMode === 'auto') {
+      setZoomState(next);
+    }
+  }, [clamp, zoomMode]);
 
   useEffect(() => {
     const serialized = JSON.stringify(normalizedInitial);
@@ -57,8 +83,16 @@ export const useCanvas = (initial?: Partial<CanvasConfig>): UseCanvasState => {
       lastInitialRef.current = serialized;
       setCanvasState(JSON.parse(serialized));
       setZoomState(1);
+      autoZoomRef.current = 1;
+      setZoomModeState('auto');
     }
   }, [normalizedInitial]);
+
+  useEffect(() => {
+    if (zoomMode === 'auto') {
+      setZoomState(autoZoomRef.current);
+    }
+  }, [zoomMode]);
 
   return useMemo(() => ({
     canvas,
@@ -67,5 +101,8 @@ export const useCanvas = (initial?: Partial<CanvasConfig>): UseCanvasState => {
     setZoom,
     zoomIn,
     zoomOut,
-  }), [canvas, setCanvas, zoom, setZoom, zoomIn, zoomOut]);
+    zoomMode,
+    setZoomMode,
+    applyAutoZoom,
+  }), [canvas, setCanvas, zoom, setZoom, zoomIn, zoomOut, zoomMode, setZoomMode, applyAutoZoom]);
 };

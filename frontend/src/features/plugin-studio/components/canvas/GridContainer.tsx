@@ -208,20 +208,22 @@ export const GridContainer: React.FC<GridContainerProps> = ({
     <Box
       sx={{
         minHeight: scaledHeight,
-        width: scaledWidth,
+        width: '100%',
         maxWidth: 'none',
-        mx: 'auto',
+        display: 'flex',
+        justifyContent: 'flex-start',
       }}
     >
-      <Box
-        sx={{
-          transform: `scale(${zoom})`,
-          transformOrigin: 'top left',
-          width: effectiveWidth,
-          minHeight: Math.max(400, canvasHeight),
-        }}
-      >
-        <ResponsiveGridLayout
+      <Box sx={{ width: scaledWidth, minHeight: scaledHeight }}>
+        <Box
+          sx={{
+            transform: `scale(${zoom})`,
+            transformOrigin: 'top left',
+            width: effectiveWidth,
+            minHeight: Math.max(400, canvasHeight),
+          }}
+        >
+          <ResponsiveGridLayout
           className="layout"
           layouts={convertedLayouts}
           breakpoints={{
@@ -252,28 +254,29 @@ export const GridContainer: React.FC<GridContainerProps> = ({
           measureBeforeMount={false}
           transformScale={zoom}
         >
-        {currentLayout
-          .filter(item => item && item.i && typeof item.y === 'number' && typeof item.x === 'number' &&
-                  typeof item.w === 'number' && typeof item.h === 'number') // Filter out invalid items and ensure all required properties exist
-          .map(item => {
-            // Ensure item has pluginId (required by GridItem)
-            const gridItem = 'pluginId' in item ?
-              item as GridItemType :
-              { ...item, pluginId: '' } as GridItemType;
-              
-            return (
-              <div key={item.i}>
-                <GridItem
-                  item={gridItem}
-                  isSelected={selectedItem?.i === item.i}
-                  onSelect={() => handleItemSelect(item.i)}
-                  previewMode={previewMode}
-                  isNew={item.i === newItemId}
-                />
-              </div>
-            );
-          })}
-        </ResponsiveGridLayout>
+          {currentLayout
+            .filter(item => item && item.i && typeof item.y === 'number' && typeof item.x === 'number' &&
+                    typeof item.w === 'number' && typeof item.h === 'number') // Filter out invalid items and ensure all required properties exist
+            .map(item => {
+              // Ensure item has pluginId (required by GridItem)
+              const gridItem = 'pluginId' in item ?
+                item as GridItemType :
+                { ...item, pluginId: '' } as GridItemType;
+                
+              return (
+                <div key={item.i}>
+                  <GridItem
+                    item={gridItem}
+                    isSelected={selectedItem?.i === item.i}
+                    onSelect={() => handleItemSelect(item.i)}
+                    previewMode={previewMode}
+                    isNew={item.i === newItemId}
+                  />
+                </div>
+              );
+            })}
+          </ResponsiveGridLayout>
+        </Box>
       </Box>
     </Box>
   );
