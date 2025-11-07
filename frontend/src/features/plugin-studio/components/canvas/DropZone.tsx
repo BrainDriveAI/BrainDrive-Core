@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { Box, Snackbar, Alert } from '@mui/material';
 import { usePluginStudio } from '../../hooks';
 import { DragData } from '../../types';
-import { VIEW_MODE_LAYOUTS, VIEW_MODE_COLS } from '../../constants';
+import { VIEW_MODE_LAYOUTS } from '../../constants';
 
 interface DropZoneProps {
   children: React.ReactNode;
@@ -15,7 +15,7 @@ interface DropZoneProps {
  * @returns The drop zone component
  */
 export const DropZone: React.FC<DropZoneProps> = ({ children, onNewItem }) => {
-  const { viewMode, currentPage, savePage, addItem, layouts, canvas } = usePluginStudio();
+  const { viewMode, currentPage, savePage, addItem } = usePluginStudio();
   const [isDragOver, setIsDragOver] = useState(false);
   const [warningOpen, setWarningOpen] = useState(false);
   
@@ -100,35 +100,13 @@ export const DropZone: React.FC<DropZoneProps> = ({ children, onNewItem }) => {
       // Get default size from module layout or use default from view mode config
       const moduleLayout = moduleData.layout;
       const viewModeConfig = VIEW_MODE_LAYOUTS[viewMode.type];
-      const colsForMode = VIEW_MODE_COLS[viewMode.type];
       
       // Create a unique ID for the module
       const uniqueId = `${moduleData.pluginId}_${moduleData.moduleId}_${Date.now()}`;
       
-      // Determine if this is the first item (canvas empty across all layouts)
-      const isFirstItem = !layouts || (
-        (!layouts.desktop || layouts.desktop.length === 0) &&
-        (!layouts.tablet || layouts.tablet.length === 0) &&
-        (!layouts.mobile || layouts.mobile.length === 0)
-      );
-
-      // Calculate width and height based on available properties or auto-fill for first item
+      // Calculate width and height based on available properties
       let width = moduleLayout?.defaultWidth || moduleLayout?.minWidth || viewModeConfig.defaultItemSize.w;
       let height = moduleLayout?.defaultHeight || moduleLayout?.minHeight || viewModeConfig.defaultItemSize.h;
-
-      if (isFirstItem) {
-        // Auto-fill to full canvas bounds
-        width = colsForMode;
-        const rows = Math.max(1, Math.ceil(canvas.height / viewModeConfig.rowHeight));
-        height = rows;
-
-        if (moduleLayout?.maxWidth) {
-          width = Math.min(width, moduleLayout.maxWidth);
-        }
-        if (moduleLayout?.maxHeight) {
-          height = Math.min(height, moduleLayout.maxHeight);
-        }
-      }
       
       console.log('Adding item to layout:', {
         uniqueId,
