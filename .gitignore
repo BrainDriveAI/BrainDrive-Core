@@ -206,13 +206,7 @@ tmp/
 # Patch files
 patches/
 
-# Documentation and Reports
-docs/
-Docs/
-/docs
-/Docs
-**/docs/
-**/Docs/
+# Reports
 reports/
 **/reports/
 Reports/
