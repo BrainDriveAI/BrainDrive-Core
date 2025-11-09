@@ -1339,12 +1339,9 @@ export const DisplayLayoutEngineImpl: React.FC<DisplayLayoutEngineProps> = React
               />
             )}
           {(() => {
-            const activeLayout =
-              displayedLayouts[currentBreakpoint as keyof ResponsiveLayouts] ||
-              displayedLayouts.desktop || displayedLayouts.wide || [];
             const wantsFullWidth = !showControls && (
-              (Array.isArray(activeLayout) && activeLayout.length === 1) ||
-              (Array.isArray(activeLayout) && activeLayout.some((it: any) => it?.config?.viewportFill || it?.config?.fullWidth))
+              (Array.isArray(currentLayout) && currentLayout.length === 1) ||
+              (Array.isArray(currentLayout) && currentLayout.some((it: any) => it?.config?.viewportFill || it?.config?.fullWidth))
             );
             return (
               <ModuleRenderer
@@ -1459,8 +1456,8 @@ export const DisplayLayoutEngineImpl: React.FC<DisplayLayoutEngineProps> = React
             }
 
             const wantsFullWidth = !showControls && (
-              (Array.isArray(activeLayout) && activeLayout.length === 1) ||
-              (Array.isArray(activeLayout) && activeLayout.some((it: any) => it?.config?.viewportFill || it?.config?.fullWidth))
+              (Array.isArray(currentLayout) && currentLayout.length === 1) ||
+              (Array.isArray(currentLayout) && currentLayout.some((it: any) => it?.config?.viewportFill || it?.config?.fullWidth))
             );
             return (
               <ModuleRenderer

@@ -5,7 +5,7 @@ import { LegacyModuleAdapter } from '../adapters/LegacyModuleAdapter';
 import { useBreakpoint } from '../hooks/useBreakpoint';
 import { GridItemControls } from '../../plugin-studio/components/canvas/GridItemControls';
 import { useUnifiedLayoutState } from '../hooks/useUnifiedLayoutState';
-import { LayoutChangeOrigin } from '../utils/layoutChangeManager';
+import { LayoutChangeOrigin, generateLayoutHash } from '../utils/layoutChangeManager';
 
 const ResponsiveGridLayout = WidthProvider(Responsive);
 
@@ -33,6 +33,86 @@ const defaultGridConfig = {
   containerPadding: [10, 10] as [number, number],
   breakpoints: { xxl: 1600, xl: 1400, lg: 1024, sm: 768, xs: 0 },
 };
+
+const INTERACTION_LOCK_GRACE_MS = 500;
+const BOUNCE_THRESHOLD_MS = 300;
+
+interface InteractionLockState {
+  active: boolean;
+  operationId: string | null;
+  startTime: number;
+  intendedLayout: ResponsiveLayouts | null;
+  graceUntil?: number;
+  releaseTimer?: ReturnType<typeof setTimeout> | null;
+}
+
+interface BounceHistoryEntry {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  timestamp: number;
+}
+
+interface BounceEventDetails {
+  itemId: string;
+  previous: BounceHistoryEntry;
+  interim: BounceHistoryEntry;
+  incoming: BounceHistoryEntry;
+  deltaMs: number;
+}
+
+class BounceDetector {
+  private recentChanges = new Map<string, BounceHistoryEntry[]>();
+
+  constructor(private readonly bounceThreshold = BOUNCE_THRESHOLD_MS) {}
+
+  detectBounce(itemId: string, newPosition: BounceHistoryEntry): BounceEventDetails | null {
+    const history = this.recentChanges.get(itemId);
+    if (!history || history.length < 2) {
+      return null;
+    }
+
+    const interim = history[history.length - 1];
+    const previous = history[history.length - 2];
+    const returningToPrevious =
+      previous.x === newPosition.x &&
+      previous.y === newPosition.y &&
+      previous.w === newPosition.w &&
+      previous.h === newPosition.h;
+    const movedAwayFromPrevious =
+      interim.x !== previous.x ||
+      interim.y !== previous.y ||
+      interim.w !== previous.w ||
+      interim.h !== previous.h;
+    const revertedWithinThreshold = newPosition.timestamp - interim.timestamp <= this.bounceThreshold;
+
+    if (returningToPrevious && movedAwayFromPrevious && revertedWithinThreshold) {
+      return {
+        itemId,
+        previous,
+        interim,
+        incoming: newPosition,
+        deltaMs: newPosition.timestamp - interim.timestamp
+      };
+    }
+
+    return null;
+  }
+
+  recordChange(itemId: string, position: BounceHistoryEntry): void {
+    const history = this.recentChanges.get(itemId) ?? [];
+    history.push(position);
+    if (history.length > 5) {
+      history.shift();
+    }
+    this.recentChanges.set(itemId, history);
+  }
+
+  clear(): void {
+    this.recentChanges.clear();
+  }
+}
 
 export const LayoutEngineBase: React.FC<LayoutEngineBaseProps> = React.memo(({
   layouts,
@@ -105,6 +185,31 @@ export const LayoutEngineBase: React.FC<LayoutEngineBaseProps> = React.memo(({
     
     return stableLayoutsRef.current;
   }, [unifiedLayoutState.layouts]);
+  
+  useEffect(() => {
+    const metadataMap = layoutMetadataRef.current;
+    metadataMap.clear();
+    Object.values(currentLayouts).forEach(layout => {
+      (layout || []).forEach(item => {
+        metadataMap.set(item.i, item);
+      });
+    });
+  }, [currentLayouts]);
+
+  // Stable module lookup map (must be defined before any usage)
+  const stableModuleMapRef = useRef<Record<string, ModuleConfig>>({});
+  const moduleMap = useMemo(() => {
+    const newModuleMap = modules.reduce((map, module) => {
+      map[module.id] = module;
+      return map;
+    }, {} as Record<string, ModuleConfig>);
+    const currentHash = JSON.stringify(stableModuleMapRef.current);
+    const newHash = JSON.stringify(newModuleMap);
+    if (currentHash !== newHash) {
+      stableModuleMapRef.current = newModuleMap;
+    }
+    return stableModuleMapRef.current;
+  }, [modules]);
 
   // Local UI state
   const [selectedItem, setSelectedItem] = useState<string | null>(null);
@@ -116,10 +221,17 @@ export const LayoutEngineBase: React.FC<LayoutEngineBaseProps> = React.memo(({
   const previousPositionsRef = useRef<
     Map<string, { x: number; y: number; w: number; h: number; timestamp: number }>
   >(new Map());
-  const intendedPositionsRef = useRef<
-    Map<string, { x: number; y: number; w: number; h: number; timestamp: number }>
-  >(new Map());
-  const bounceWindowMs = 1000;
+  const layoutMetadataRef = useRef<Map<string, LayoutItem>>(new Map());
+  const lastExternalLayoutHashRef = useRef<string | null>(generateLayoutHash(layouts));
+  const interactionLockRef = useRef<InteractionLockState>({
+    active: false,
+    operationId: null,
+    startTime: 0,
+    intendedLayout: null,
+    graceUntil: undefined,
+    releaseTimer: null
+  });
+  const bounceDetectorRef = useRef(new BounceDetector(BOUNCE_THRESHOLD_MS));
 
   const debugLog = useCallback((message: string, details?: Record<string, unknown>) => {
     if (process.env.NODE_ENV !== 'development') {
@@ -134,6 +246,90 @@ export const LayoutEngineBase: React.FC<LayoutEngineBaseProps> = React.memo(({
   // Track operation IDs for proper state management
   const currentOperationId = useRef<string | null>(null);
   const pageIdRef = useRef<string | undefined>(pageId);
+  const cloneLayouts = useCallback((layouts?: ResponsiveLayouts | null): ResponsiveLayouts | null => {
+    if (!layouts) {
+      return null;
+    }
+    return JSON.parse(JSON.stringify(layouts));
+  }, []);
+
+  const isInteractionLocked = useCallback(() => {
+    const lock = interactionLockRef.current;
+    if (lock.active) {
+      return true;
+    }
+    if (lock.graceUntil && lock.graceUntil > Date.now()) {
+      return true;
+    }
+    return false;
+  }, []);
+
+  const resetInteractionLock = useCallback((reason: string) => {
+    const lock = interactionLockRef.current;
+    if (lock.releaseTimer) {
+      clearTimeout(lock.releaseTimer);
+      lock.releaseTimer = null;
+    }
+    lock.active = false;
+    lock.operationId = null;
+    lock.startTime = 0;
+    lock.intendedLayout = null;
+    lock.graceUntil = undefined;
+    debugLog('Interaction lock reset', { reason });
+  }, [debugLog]);
+
+  const activateInteractionLock = useCallback((operationId: string) => {
+    const lock = interactionLockRef.current;
+    if (lock.releaseTimer) {
+      clearTimeout(lock.releaseTimer);
+      lock.releaseTimer = null;
+    }
+    lock.active = true;
+    lock.operationId = operationId;
+    lock.startTime = Date.now();
+    lock.graceUntil = undefined;
+    debugLog('Interaction lock engaged', { operationId });
+  }, [debugLog]);
+
+  const updateInteractionIntent = useCallback((layouts: ResponsiveLayouts) => {
+    interactionLockRef.current.intendedLayout = cloneLayouts(layouts);
+    debugLog('Interaction intent updated', {
+      operationId: interactionLockRef.current.operationId,
+      hasLayout: Boolean(interactionLockRef.current.intendedLayout)
+    });
+  }, [cloneLayouts, debugLog]);
+
+  const releaseInteractionLock = useCallback((operationId: string | null, reason: string) => {
+    const lock = interactionLockRef.current;
+    if (!lock.active || (operationId && lock.operationId !== operationId)) {
+      return;
+    }
+
+    const performRelease = async () => {
+      try {
+        await unifiedLayoutState.flush();
+      } catch (error) {
+        console.error('[LayoutEngineBase] Failed to flush before releasing interaction lock', error);
+      } finally {
+        lock.active = false;
+        lock.operationId = null;
+        lock.graceUntil = Date.now() + INTERACTION_LOCK_GRACE_MS;
+        if (lock.releaseTimer) {
+          clearTimeout(lock.releaseTimer);
+        }
+        lock.releaseTimer = setTimeout(() => {
+          const currentLock = interactionLockRef.current;
+          if (currentLock.graceUntil && currentLock.graceUntil <= Date.now()) {
+            currentLock.graceUntil = undefined;
+            currentLock.intendedLayout = null;
+          }
+        }, INTERACTION_LOCK_GRACE_MS);
+        debugLog('Interaction lock released', { reason });
+      }
+    };
+
+    void performRelease();
+  }, [debugLog, unifiedLayoutState]);
 
   // Handle external layout changes (from props)
   useEffect(() => {
@@ -143,28 +339,49 @@ export const LayoutEngineBase: React.FC<LayoutEngineBaseProps> = React.memo(({
       unifiedLayoutState.resetLayouts(layouts);
       pageIdRef.current = pageId;
       previousPositionsRef.current.clear();
-      intendedPositionsRef.current.clear();
+      bounceDetectorRef.current.clear();
+      resetInteractionLock('page-change');
+      lastExternalLayoutHashRef.current = generateLayoutHash(layouts);
+      return;
+    }
+
+    const incomingHash = generateLayoutHash(layouts);
+
+    // Ignore duplicate external layouts we've already processed (prevents stale replays)
+    if (lastExternalLayoutHashRef.current === incomingHash) {
+      if (process.env.NODE_ENV === 'development') {
+        console.log('[LayoutEngine] Skipping duplicate external layout hash:', incomingHash);
+      }
       return;
     }
 
     // Skip if layouts are semantically identical
     if (unifiedLayoutState.compareWithCurrent(layouts)) {
+      lastExternalLayoutHashRef.current = incomingHash;
       return;
     }
 
     // Skip during active operations to prevent interference
-    if (isDragging || isResizing) {
-      console.log('[LayoutEngine] Skipping external sync during active operation');
+    if (isInteractionLocked()) {
+      console.log('[LayoutEngine] Skipping external sync during interaction lock');
       return;
     }
 
     // Update from external source
     console.log('[LayoutEngine] Syncing external layout change');
+    lastExternalLayoutHashRef.current = incomingHash;
     unifiedLayoutState.updateLayouts(layouts, {
       source: 'external-sync',
       timestamp: Date.now()
     });
-  }, [layouts, pageId, isDragging, isResizing, unifiedLayoutState]);
+  }, [layouts, pageId, unifiedLayoutState, isInteractionLocked, resetInteractionLock]);
+
+  useEffect(() => {
+    return () => {
+      resetInteractionLock('unmount');
+      bounceDetectorRef.current.clear();
+    };
+  }, [resetInteractionLock]);
 
   // Handle layout change - convert from react-grid-layout format to our format
   const handleLayoutChange = useCallback((layout: any[] = [], allLayouts: any = {}) => {
@@ -172,30 +389,45 @@ export const LayoutEngineBase: React.FC<LayoutEngineBaseProps> = React.memo(({
     const items = Array.isArray(layout) ? layout : [];
     const now = Date.now();
 
-    // Guard against bounce regressions by ignoring rapid post-operation flips
+    // Guard against bounce regressions by detecting A→B→A flips in rapid succession
     if (!operationId && !isDragging && !isResizing && items.length > 0) {
-      const bounceDetected = items.some(item => {
-        const key = `${item.i}`;
-        const intended = intendedPositionsRef.current.get(key);
-        if (!intended) {
-          return false;
+      const bounceDetector = bounceDetectorRef.current;
+      const bounceEvents: BounceEventDetails[] = [];
+
+      items.forEach(item => {
+        const position: BounceHistoryEntry = {
+          x: item?.x ?? 0,
+          y: item?.y ?? 0,
+          w: item?.w ?? 0,
+          h: item?.h ?? 0,
+          timestamp: now
+        };
+        const bounceEvent = bounceDetector.detectBounce(`${item.i}`, position);
+        if (bounceEvent) {
+          bounceEvents.push(bounceEvent);
         }
-        const moved = intended.x !== item.x || intended.y !== item.y ||
-                      intended.w !== item.w || intended.h !== item.h;
-        const withinWindow = now - intended.timestamp < bounceWindowMs;
-        if (moved && withinWindow) {
-          debugLog('Bounce suppressed', {
-            itemId: item.i,
-            intended,
-            next: { x: item.x, y: item.y, w: item.w, h: item.h },
-            deltaMs: now - intended.timestamp
-          });
-          return true;
-        }
-        return false;
       });
 
-      if (bounceDetected) {
+      if (bounceEvents.length > 0) {
+        const lock = interactionLockRef.current;
+        lock.graceUntil = Date.now() + INTERACTION_LOCK_GRACE_MS;
+        const intendedLayout = lock.intendedLayout ? cloneLayouts(lock.intendedLayout) : null;
+
+        console.warn('[LayoutEngineBase] Bounce detected - reapplying intended layout', {
+          events: bounceEvents,
+          hasIntendedLayout: Boolean(intendedLayout)
+        });
+
+        if (intendedLayout) {
+          unifiedLayoutState.updateLayouts(intendedLayout, {
+            source: 'user-bounce-recovery',
+            timestamp: now,
+            operationId: lock.operationId || undefined
+          });
+        } else {
+          console.warn('[LayoutEngineBase] Unable to reapply intended layout after bounce - missing snapshot');
+        }
+
         return;
       }
     }
@@ -223,6 +455,7 @@ export const LayoutEngineBase: React.FC<LayoutEngineBaseProps> = React.memo(({
         }
 
         previousPositionsRef.current.set(key, current);
+        bounceDetectorRef.current.recordChange(key, current);
       });
     };
 
@@ -230,20 +463,36 @@ export const LayoutEngineBase: React.FC<LayoutEngineBaseProps> = React.memo(({
 
     const normalizeItems = (itemsToNormalize: any[] = []): LayoutItem[] => {
       return (itemsToNormalize || []).map((it: any) => {
+        const metadata = layoutMetadataRef.current.get(it?.i ?? '');
+        const resolvedModuleId = it?.moduleId || metadata?.moduleId || it?.i || '';
+        const moduleConfig = moduleMap[resolvedModuleId];
+        const resolvedPluginId =
+          it?.pluginId ||
+          metadata?.pluginId ||
+          moduleConfig?.pluginId ||
+          moduleConfig?._legacy?.pluginId ||
+          'unknown';
+        const resolvedConfig =
+          it?.config ||
+          metadata?.config ||
+          moduleConfig?._legacy?.originalConfig ||
+          moduleConfig?.config ||
+          {};
+
         const draft: LayoutItem = {
-          i: it?.i ?? '',
-          x: it?.x ?? 0,
-          y: it?.y ?? 0,
-          w: it?.w ?? 2,
-          h: it?.h ?? 2,
-          moduleId: it?.moduleId || it?.i || '',
-          pluginId: it?.pluginId || 'unknown',
-          minW: it?.minW,
-          minH: it?.minH,
-          isDraggable: it?.isDraggable ?? true,
-          isResizable: it?.isResizable ?? true,
-          static: it?.static ?? false,
-          config: it?.config
+          i: it?.i ?? resolvedModuleId,
+          x: it?.x ?? metadata?.x ?? 0,
+          y: it?.y ?? metadata?.y ?? 0,
+          w: it?.w ?? metadata?.w ?? 2,
+          h: it?.h ?? metadata?.h ?? 2,
+          moduleId: resolvedModuleId,
+          pluginId: resolvedPluginId,
+          minW: it?.minW ?? metadata?.minW,
+          minH: it?.minH ?? metadata?.minH,
+          isDraggable: it?.isDraggable ?? metadata?.isDraggable ?? true,
+          isResizable: it?.isResizable ?? metadata?.isResizable ?? true,
+          static: it?.static ?? metadata?.static ?? false,
+          config: resolvedConfig
         };
         return draft;
       });
@@ -280,7 +529,17 @@ export const LayoutEngineBase: React.FC<LayoutEngineBaseProps> = React.memo(({
     if (items.length > 0 && currentBreakpoint) {
       const ourBreakpoint = breakpointMap[currentBreakpoint];
       if (ourBreakpoint) {
-        convertedLayouts[ourBreakpoint] = normalizeItems(items);
+        const normalizedActiveItems = normalizeItems(items);
+        convertedLayouts[ourBreakpoint] = normalizedActiveItems;
+        
+        if (mode === RenderMode.STUDIO) {
+          const studioMirrorTargets: (keyof ResponsiveLayouts)[] = ['desktop', 'wide'];
+          studioMirrorTargets.forEach(target => {
+            if (target !== ourBreakpoint) {
+              convertedLayouts[target] = normalizedActiveItems;
+            }
+          });
+        }
       }
     }
 
@@ -293,24 +552,18 @@ export const LayoutEngineBase: React.FC<LayoutEngineBaseProps> = React.memo(({
     unifiedLayoutState.updateLayouts(convertedLayouts, origin);
 
     if (operationId && (origin.source === 'user-drag' || origin.source === 'user-resize') && items.length > 0) {
-      items.forEach(item => {
-        intendedPositionsRef.current.set(`${item.i}`, {
-          x: item.x,
-          y: item.y,
-          w: item.w,
-          h: item.h,
-          timestamp: now
-        });
-      });
+      updateInteractionIntent(convertedLayouts);
     }
   }, [
-    bounceWindowMs,
+    cloneLayouts,
     currentBreakpoint,
     debugLog,
-    intendedPositionsRef,
     isDragging,
     isResizing,
+    moduleMap,
     previousPositionsRef,
+    mode,
+    updateInteractionIntent,
     unifiedLayoutState
   ]);
 
@@ -318,65 +571,45 @@ export const LayoutEngineBase: React.FC<LayoutEngineBaseProps> = React.memo(({
   const handleDragStart = useCallback(() => {
     const operationId = `drag-${Date.now()}`;
     currentOperationId.current = operationId;
+    activateInteractionLock(operationId);
     setIsDragging(true);
     unifiedLayoutState.startOperation(operationId);
     console.log('[LayoutEngine] Started drag operation:', operationId);
-  }, [unifiedLayoutState]);
+  }, [activateInteractionLock, unifiedLayoutState]);
 
   // Handle drag stop
-  const handleDragStop = useCallback((layout: any[], ..._args: any[]) => {
-    if (currentOperationId.current) {
-      unifiedLayoutState.stopOperation(currentOperationId.current);
-      console.log('[LayoutEngine] Stopped drag operation:', currentOperationId.current);
+  const handleDragStop = useCallback((_layout: any[], ..._args: any[]) => {
+    const operationId = currentOperationId.current;
+    if (operationId) {
+      unifiedLayoutState.stopOperation(operationId);
+      console.log('[LayoutEngine] Stopped drag operation:', operationId);
       currentOperationId.current = null;
+      releaseInteractionLock(operationId, 'drag-stop');
     }
     setIsDragging(false);
-
-    if (Array.isArray(layout)) {
-      const now = Date.now();
-      layout.forEach(item => {
-        intendedPositionsRef.current.set(`${item.i}`, {
-          x: item.x,
-          y: item.y,
-          w: item.w,
-          h: item.h,
-          timestamp: now
-        });
-      });
-    }
-  }, [unifiedLayoutState]);
+  }, [releaseInteractionLock, unifiedLayoutState]);
 
   // Handle resize start
   const handleResizeStart = useCallback(() => {
     const operationId = `resize-${Date.now()}`;
     currentOperationId.current = operationId;
     setIsResizing(true);
+    activateInteractionLock(operationId);
     unifiedLayoutState.startOperation(operationId);
     console.log('[LayoutEngine] Started resize operation:', operationId);
-  }, [unifiedLayoutState]);
+  }, [activateInteractionLock, unifiedLayoutState]);
 
   // Handle resize stop
-  const handleResizeStop = useCallback((layout: any[], ..._args: any[]) => {
-    if (currentOperationId.current) {
-      unifiedLayoutState.stopOperation(currentOperationId.current);
-      console.log('[LayoutEngine] Stopped resize operation:', currentOperationId.current);
+  const handleResizeStop = useCallback((_layout: any[], ..._args: any[]) => {
+    const operationId = currentOperationId.current;
+    if (operationId) {
+      unifiedLayoutState.stopOperation(operationId);
+      console.log('[LayoutEngine] Stopped resize operation:', operationId);
       currentOperationId.current = null;
+      releaseInteractionLock(operationId, 'resize-stop');
     }
     setIsResizing(false);
-
-    if (Array.isArray(layout)) {
-      const now = Date.now();
-      layout.forEach(item => {
-        intendedPositionsRef.current.set(`${item.i}`, {
-          x: item.x,
-          y: item.y,
-          w: item.w,
-          h: item.h,
-          timestamp: now
-        });
-      });
-    }
-  }, [unifiedLayoutState]);
+  }, [releaseInteractionLock, unifiedLayoutState]);
 
   // Handle drag over for drop zone functionality
   const handleDragOver = useCallback((e: React.DragEvent<HTMLDivElement>) => {
@@ -526,26 +759,6 @@ export const LayoutEngineBase: React.FC<LayoutEngineBaseProps> = React.memo(({
     // Call the external callback if provided
     onItemRemove?.(itemId);
   }, [currentLayouts, unifiedLayoutState, selectedItem, onItemRemove]);
-
-  // Create ultra-stable module map with deep comparison
-  const stableModuleMapRef = useRef<Record<string, ModuleConfig>>({});
-  
-  const moduleMap = useMemo(() => {
-    const newModuleMap = modules.reduce((map, module) => {
-      map[module.id] = module;
-      return map;
-    }, {} as Record<string, ModuleConfig>);
-    
-    // Only update if the actual content has changed (deep comparison)
-    const currentHash = JSON.stringify(stableModuleMapRef.current);
-    const newHash = JSON.stringify(newModuleMap);
-    
-    if (currentHash !== newHash) {
-      stableModuleMapRef.current = newModuleMap;
-    }
-    
-    return stableModuleMapRef.current;
-  }, [modules]);
 
   // Render grid items
   const renderGridItems = useCallback(() => {

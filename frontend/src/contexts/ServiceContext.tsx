@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useEffect, useState, useCallback, ReactNode } from 'react';
+import React, { createContext, useContext, useEffect, useState, useCallback, ReactNode, useRef } from 'react';
 import { ServiceRegistry } from '../services/ServiceRegistry';
 import { BaseService } from '../services/base/BaseService';
 import ApiService from '../services/ApiService';
@@ -144,27 +144,65 @@ class ServiceInitQueue {
 export function ServiceProvider({ children, registry }: ServiceProviderProps) {
   const [isInitialized, setIsInitialized] = useState(false);
   const [error, setError] = useState<Error | null>(null);
+  const hasInitializedRef = useRef(false);
+  const initializingPromiseRef = useRef<Promise<void> | null>(null);
+  const pendingDestroyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const initializeServices = useCallback(async () => {
+    if (hasInitializedRef.current) {
+      return;
+    }
+    if (initializingPromiseRef.current) {
+      return initializingPromiseRef.current;
+    }
+
+    initializingPromiseRef.current = (async () => {
+      try {
+        const initQueue = new ServiceInitQueue(registry);
+        await initQueue.initializeAll();
+        hasInitializedRef.current = true;
+        setIsInitialized(true);
+        setError(null);
+      } catch (e) {
+        setError(e instanceof Error ? e : new Error('Failed to initialize services'));
+      } finally {
+        initializingPromiseRef.current = null;
+      }
+    })();
+
+    return initializingPromiseRef.current;
+  }, [registry]);
+
+  const destroyServices = useCallback(async () => {
+    if (!hasInitializedRef.current) {
+      return;
+    }
     try {
-      const initQueue = new ServiceInitQueue(registry);
-      await initQueue.initializeAll();
-      setIsInitialized(true);
+      await registry.destroyAll();
     } catch (e) {
-      setError(e instanceof Error ? e : new Error('Failed to initialize services'));
+      console.error('Error during service cleanup:', e);
+    } finally {
+      hasInitializedRef.current = false;
     }
   }, [registry]);
 
   useEffect(() => {
+    if (pendingDestroyTimeoutRef.current) {
+      clearTimeout(pendingDestroyTimeoutRef.current);
+      pendingDestroyTimeoutRef.current = null;
+    }
+
     initializeServices();
 
     return () => {
-      // Cleanup on unmount
-      registry.destroyAll().catch(e => {
-        console.error('Error during service cleanup:', e);
-      });
+      if (pendingDestroyTimeoutRef.current) {
+        clearTimeout(pendingDestroyTimeoutRef.current);
+      }
+      pendingDestroyTimeoutRef.current = setTimeout(() => {
+        destroyServices();
+      }, 0);
     };
-  }, [registry, initializeServices]);
+  }, [initializeServices, destroyServices]);
 
   const contextValue: ServiceContextValue = {
     registry,
