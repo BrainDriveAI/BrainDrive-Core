@@ -1,9 +1,10 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { Page, CreatePageParams, UpdatePageParams, PageHierarchyParams } from '../../types';
+import { Page, CreatePageParams, UpdatePageParams, PageHierarchyParams, ModuleDefinition, Layouts, GridItem, LayoutItem } from '../../types';
 import { pageService } from '../../../../services/pageService';
 import { normalizeObjectKeys } from '../../../../utils/caseConversion';
 import { usePageState } from '../../../../contexts/PageStateContext';
 import { DEFAULT_CANVAS_CONFIG } from '../../constants/canvas.constants';
+import { usePlugins } from '../plugin/usePlugins';
 
 /**
  * Custom hook for managing pages
@@ -16,10 +17,110 @@ export const usePages = () => {
   const [error, setError] = useState<string | null>(null);
   // Get the clearCache function from PageStateContext
   const { clearCache } = usePageState();
+  const { getModuleById } = usePlugins();
   
   // Phase 1: Add debug mode flag
   const isDebugMode = import.meta.env.VITE_LAYOUT_DEBUG === 'true';
   // Remove hasPendingChanges state since we're not using it anymore
+
+  const inferPluginId = useCallback((moduleKey?: string): string => {
+    if (!moduleKey) return 'unknown';
+    const parts = moduleKey.split('_');
+    if (parts.length >= 2) {
+      return `${parts[0]}_${parts[1]}`;
+    }
+    return parts[0] || 'unknown';
+  }, []);
+
+  const buildModulesFromLayouts = useCallback((pageLike: { layouts?: Layouts; content?: { layouts?: Layouts }; modules?: Record<string, ModuleDefinition> }) => {
+    const modules: Record<string, ModuleDefinition> = {};
+    const sourceLayouts = pageLike.layouts || pageLike.content?.layouts;
+    if (!sourceLayouts) {
+      return modules;
+    }
+
+    const collect = (items: (GridItem | LayoutItem | any)[] = []) => {
+      items?.forEach(item => {
+        const moduleKey = (item as LayoutItem).moduleUniqueId || item.i;
+        if (!moduleKey || modules[moduleKey]) {
+          return;
+        }
+
+        const explicitPluginId = (item as GridItem).pluginId || (item as LayoutItem).pluginId;
+        const pluginId = explicitPluginId && explicitPluginId !== 'unknown'
+          ? explicitPluginId
+          : inferPluginId(moduleKey);
+
+        const args = (item as GridItem).args || (item as LayoutItem).configOverrides || {};
+        const moduleId = args.moduleId || moduleKey;
+        const moduleDef = pluginId && getModuleById ? getModuleById(pluginId, moduleId) : null;
+
+        const defaultConfig: Record<string, any> = {};
+        if (moduleDef?.configFields) {
+          Object.entries(moduleDef.configFields).forEach(([key, field]: [string, any]) => {
+            if (field && typeof field === 'object' && 'default' in field) {
+              defaultConfig[key] = field.default;
+            }
+          });
+        }
+        if (moduleDef?.props) {
+          Object.entries(moduleDef.props).forEach(([key, prop]: [string, any]) => {
+            if (prop && typeof prop === 'object' && 'default' in prop) {
+              defaultConfig[key] = prop.default;
+            }
+          });
+        }
+
+        modules[moduleKey] = {
+          pluginId,
+          moduleId,
+          moduleName: moduleDef?.displayName || moduleDef?.name || args.displayName || moduleKey,
+          config: {
+            ...defaultConfig,
+            ...args
+          }
+        };
+      });
+    };
+
+    collect(sourceLayouts.desktop);
+    collect(sourceLayouts.tablet);
+    collect(sourceLayouts.mobile);
+
+    if (import.meta.env.MODE === 'development') {
+      console.log('[usePages] Rebuilt modules from layouts', {
+        pageId: pageLike?.id,
+        moduleKeys: Object.keys(modules)
+      });
+    }
+
+    return modules;
+  }, [getModuleById, inferPluginId]);
+
+  const ensureModules = useCallback((pageLike: any): { modules: Record<string, ModuleDefinition>; rebuilt: boolean } => {
+    const fromContent = pageLike?.content?.modules ? normalizeObjectKeys(pageLike.content.modules) : {};
+    const fromRoot = pageLike?.modules ? normalizeObjectKeys(pageLike.modules) : {};
+    const merged: Record<string, ModuleDefinition> = { ...fromRoot, ...fromContent };
+
+    const derived = buildModulesFromLayouts(pageLike);
+    let rebuilt = false;
+
+    Object.entries(derived).forEach(([key, moduleDef]) => {
+      const existing = merged[key];
+      const missingCoreFields = !existing || !existing.pluginId || !existing.moduleId;
+      if (missingCoreFields) {
+        merged[key] = moduleDef;
+        rebuilt = true;
+      }
+    });
+
+    if (!Object.keys(merged).length && Object.keys(derived).length) {
+      Object.assign(merged, derived);
+      rebuilt = true;
+    }
+
+    return { modules: merged, rebuilt };
+  }, [buildModulesFromLayouts]);
   
   /**
    * Fetch all pages from the backend
@@ -32,29 +133,70 @@ export const usePages = () => {
       const response = await pageService.getPages();
       
       if (response && response.pages && response.pages.length > 0) {
+        const pagesNeedingRepair: Array<{ pageId: string; updateParams: UpdatePageParams }> = [];
         // Transform pages to ensure all fields are preserved
         const transformedPages = response.pages.map(page => {
+          const baseLayouts: Layouts = page.content?.layouts
+            ? JSON.parse(JSON.stringify(page.content.layouts))
+            : {
+                desktop: [],
+                tablet: [],
+                mobile: []
+              };
+          const normalizedModules = page.content?.modules ? normalizeObjectKeys(page.content.modules) : {};
+          const canvasConfig = page.content?.canvas || { ...DEFAULT_CANVAS_CONFIG };
+
           // Create a complete copy of the page with all fields
           const transformedPage = {
             ...page,
-            // Extract layouts and modules from content and place at root level
-            layouts: page.content?.layouts || {
-              desktop: [],
-              tablet: [],
-              mobile: []
-            },
-            modules: page.content?.modules ? (() => {
-              console.log('usePages - Before normalization:', page.content?.modules);
-              const normalized = normalizeObjectKeys(page.content.modules);
-              console.log('usePages - After normalization:', normalized);
-              return normalized;
-            })() : {},
-            canvas: page.content?.canvas || { ...DEFAULT_CANVAS_CONFIG }
+            layouts: baseLayouts,
+            modules: normalizedModules,
+            canvas: canvasConfig,
+            content: {
+              ...(page.content || {}),
+              layouts: JSON.parse(JSON.stringify(baseLayouts)),
+              modules: JSON.parse(JSON.stringify(normalizedModules)),
+              canvas: canvasConfig
+            }
           };
           
-          // Ensure the layouts property is synchronized with content.layouts
-          if (transformedPage.content && transformedPage.content.layouts) {
-            transformedPage.layouts = JSON.parse(JSON.stringify(transformedPage.content.layouts));
+          const { modules: ensuredModules, rebuilt } = ensureModules({
+            ...transformedPage,
+            content: {
+              ...transformedPage.content,
+              layouts: transformedPage.layouts
+            }
+          });
+
+          transformedPage.modules = ensuredModules;
+          if (transformedPage.content) {
+            transformedPage.content = {
+              ...transformedPage.content,
+              modules: JSON.parse(JSON.stringify(ensuredModules)),
+              layouts: JSON.parse(JSON.stringify(transformedPage.layouts))
+            };
+          }
+
+          if (rebuilt) {
+            pagesNeedingRepair.push({
+              pageId: page.id,
+              updateParams: {
+                content: {
+                  ...(transformedPage.content || {
+                    layouts: transformedPage.layouts,
+                    canvas: transformedPage.canvas
+                  }),
+                  modules: JSON.parse(JSON.stringify(ensuredModules)),
+                  layouts: JSON.parse(JSON.stringify(transformedPage.layouts)),
+                  canvas: transformedPage.canvas || { ...DEFAULT_CANVAS_CONFIG }
+                }
+              }
+            });
+
+            console.warn('[usePages] Rebuilt missing modules and scheduled repair', {
+              pageId: page.id,
+              moduleCount: Object.keys(ensuredModules).length
+            });
           }
           
           // Log to verify all fields are preserved
@@ -66,6 +208,19 @@ export const usePages = () => {
         });
         
         setPages(transformedPages);
+
+        if (pagesNeedingRepair.length > 0) {
+          await Promise.all(
+            pagesNeedingRepair.map(async ({ pageId, updateParams }) => {
+              try {
+                await pageService.updatePage(pageId, updateParams);
+                console.log(`[usePages] Persisted rebuilt modules for page ${pageId}`);
+              } catch (repairError) {
+                console.error(`[usePages] Failed to persist rebuilt modules for page ${pageId}`, repairError);
+              }
+            })
+          );
+        }
         
         // If there's no current page, set the first page as current
         if (!currentPage) {
