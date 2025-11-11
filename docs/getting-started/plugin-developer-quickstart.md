@@ -1,13 +1,13 @@
-# ⚡ BrainDrive Plugin Developer Quick Start
+# BrainDrive Plugin Developer Quick Start
 
 Bring your AI powered ideas to life in 30 minutes or less.
 
 By the end of this guide you will be able to:
 
-- ✅ Install and test plugins via Plugin Manager
-- ✅ Set up rapid development environment (1-minute cycles)
-- ✅ Use Service Bridges to access BrainDrive functionality (saving 90% of development time)
-- ✅ Build, test, and iterate on plugin ideas quickly
+- Install and test plugins via Plugin Manager
+- Set up rapid development environment (1-minute cycles)
+- Use Service Bridges to access BrainDrive functionality (saving 90% of development time)
+- Build, test, and iterate on plugin ideas quickly
 
 ## Prerequisites
 - Node.js 16+ installed
@@ -88,7 +88,7 @@ npm install
    - Your change appears immediately in BrainDrive
    - No reinstallation needed
 
-> 🎉 **You've just experienced the 1-minute development cycle** 
+**You've just experienced the 1-minute development cycle!** 
 
 ## Step 6: Understand Service Bridges (The BrainDrive Secret Sauce)
 
@@ -156,6 +156,10 @@ The only limit is your imagination. Your AI. Your Rules.
 
 ### Have Questions?
 
-- 💬 [Developer Forum](https://community.braindrive.ai) - Get help and share plugins
-- 📖 [API Documentation](http://localhost:8005/api/v1/docs) - Backend endpoints (when running locally)
-- 🐛 [Report Issues](https://github.com/BrainDriveAI/BrainDrive-Core/issues) - Use `[plugin]` tag
+- [Community Forums](https://community.braindrive.ai) - Get help and share plugins
+- [API Documentation](http://localhost:8005/api/v1/docs) - Backend endpoints (when running locally)
+- [Report Issues](https://github.com/BrainDriveAI/BrainDrive-Core/issues) - Use `[plugin]` tag
+
+Thank you for joining us on this mission to build a superior, user-owned alterantive to Big Tech AI systems.
+
+Your AI. Your Rules.
