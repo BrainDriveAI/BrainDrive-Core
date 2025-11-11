@@ -118,7 +118,7 @@ We welcome & appreciate contributions. See [Contributing Guidelines](CONTRIBUTIN
   * [Service Bridge Examples](/docs/how-to/use-service-bridges.md) - working examples and up to date documentation
   * [Frontend Documentation](frontend/README.md) - React application details
   * [Backend Documentation](backend/README.md) - Python API details
-  * [Full Documentation Index](https://github.com/BrainDriveAI/BrainDrive/blob/main/DOCUMENTATION_INDEX.md) - Links to all repos and corresponding documentation. 
+  * [Docs Site](https://docs.braindrive.ai) - Links to all repos and corresponding documentation. 
 
 ## License
 
