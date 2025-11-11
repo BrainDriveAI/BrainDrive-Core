@@ -17,19 +17,19 @@ class OllamaProvider(AIProvider):
         logger = logging.getLogger(__name__)
         
         # Debug logging for server URL resolution
-        logger.info(f"🔧 Ollama provider initializing with config: {config}")
-        
+        logger.info(f"[OLLAMA] Ollama provider initializing with config: {config}")
+
         self.server_url = config.get("server_url", "http://localhost:11434")
         self.api_key = config.get("api_key", "")
         self.server_name = config.get("server_name", "Default Ollama Server")
-        
+
         # Log what URL we're actually using
         if self.server_url == "http://localhost:11434" and "server_url" not in config:
-            logger.warning(f"⚠️  Ollama provider defaulting to localhost! Config was: {config}")
+            logger.warning(f"[OLLAMA] WARNING: Ollama provider defaulting to localhost! Config was: {config}")
         else:
-            logger.info(f"✅ Ollama provider using server_url: {self.server_url}")
-            
-        logger.info(f"🎯 Ollama provider initialized - server_name: {self.server_name}, server_url: {self.server_url}")
+            logger.info(f"[OLLAMA] Ollama provider using server_url: {self.server_url}")
+
+        logger.info(f"[OLLAMA] Ollama provider initialized - server_name: {self.server_name}, server_url: {self.server_url}")
         return True
 
     async def get_models(self) -> List[Dict[str, Any]]:
@@ -54,11 +54,11 @@ class OllamaProvider(AIProvider):
             yield chunk
 
     async def chat_completion(self, messages: List[Dict[str, Any]], model: str, params: Dict[str, Any]) -> Dict[str, Any]:
-        print(f"🤖 OLLAMA CHAT_COMPLETION CALLED")
-        print(f"📊 Server URL: {self.server_url}")
-        print(f"📊 Server Name: {self.server_name}")
-        print(f"📊 Model: {model}")
-        print(f"📊 Messages: {len(messages)} messages")
+        print(f"[OLLAMA] CHAT_COMPLETION CALLED")
+        print(f"[OLLAMA] Server URL: {self.server_url}")
+        print(f"[OLLAMA] Server Name: {self.server_name}")
+        print(f"[OLLAMA] Model: {model}")
+        print(f"[OLLAMA] Messages: {len(messages)} messages")
         prompt = self._format_chat_messages(messages)
         
         result = await self._call_ollama_api(prompt, model, params, is_streaming=False)
@@ -89,21 +89,83 @@ class OllamaProvider(AIProvider):
                 }]
             yield chunk
 
+    def _build_ollama_options(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Build Ollama options object from BrainDrive parameters.
+        Maps BrainDrive/OpenAI-style params to Ollama format.
+
+        Reference: https://github.com/ollama/ollama/blob/main/docs/modelfile.md
+        """
+        import logging
+        logger = logging.getLogger(__name__)
+
+        options = {}
+
+        # Direct parameter mappings (BrainDrive param -> Ollama param)
+        param_mappings = {
+            "context_window": "num_ctx",      # Context window size
+            "temperature": "temperature",      # Creativity control
+            "top_p": "top_p",                 # Nucleus sampling
+            "top_k": "top_k",                 # Token selection limit
+            "seed": "seed",                   # Random seed
+            "max_tokens": "num_predict",      # Max tokens to generate
+            "min_p": "min_p",                 # Alternative to top_p
+        }
+
+        # Map direct parameters
+        for brain_param, ollama_param in param_mappings.items():
+            if brain_param in params and params[brain_param] is not None:
+                options[ollama_param] = params[brain_param]
+                logger.debug(f"Mapped {brain_param}={params[brain_param]} -> {ollama_param}")
+
+        # Handle OpenAI-style penalties → repeat_penalty
+        # Ollama doesn't support frequency_penalty or presence_penalty directly
+        freq_penalty = params.get("frequency_penalty", 0) or 0
+        pres_penalty = params.get("presence_penalty", 0) or 0
+
+        if freq_penalty != 0 or pres_penalty != 0:
+            # Convert from OpenAI range (-2.0 to 2.0) to Ollama range (0.0 to 2.0)
+            # Formula: repeat_penalty = 1.0 + (max_penalty / 2)
+            penalty = max(abs(freq_penalty), abs(pres_penalty))
+            repeat_penalty = 1.0 + (penalty / 2.0)
+            options["repeat_penalty"] = max(0.0, min(2.0, repeat_penalty))
+            logger.debug(f"Mapped frequency/presence_penalty to repeat_penalty: {repeat_penalty}")
+
+        # Handle stop sequences (can be list or string)
+        stop_sequences = params.get("stop_sequences") or params.get("stop")
+        if stop_sequences:
+            if isinstance(stop_sequences, list) and len(stop_sequences) > 0:
+                options["stop"] = stop_sequences
+            elif isinstance(stop_sequences, str):
+                options["stop"] = [stop_sequences]
+            logger.debug(f"Added stop sequences: {options.get('stop')}")
+
+        logger.info(f"[OLLAMA] Built Ollama options: {options}")
+        return options
+
     async def _call_ollama_api(self, prompt: str, model: str, params: Dict[str, Any], is_streaming: bool = False) -> Dict[str, Any]:
         import logging
         logger = logging.getLogger(__name__)
-        
-        payload_params = params.copy() if params else {}
-        # Ensure non-streaming
-        payload_params["stream"] = False
-        payload = {"model": model, "prompt": prompt, **payload_params}
+
+        # Build Ollama options from params
+        options = self._build_ollama_options(params)
+
+        # Build payload with options object (Ollama API format)
+        payload = {
+            "model": model,
+            "prompt": prompt,
+            "stream": False,
+            "options": options  # All params go in options!
+        }
+
         headers = {'Content-Type': 'application/json'}
         if self.api_key:
             headers['Authorization'] = f'Bearer {self.api_key}'
 
         # Log the actual URL being called
         api_url = f"{self.server_url}/api/generate"
-        logger.debug(f"Making Ollama API call to: {api_url}")
+        logger.info(f"[OLLAMA] Making Ollama API call to: {api_url}")
+        logger.info(f"[OLLAMA] Payload options: {options}")
 
         try:
             # Large models can take a long time to start; increase timeout generously
@@ -124,7 +186,7 @@ class OllamaProvider(AIProvider):
                     "finish_reason": result.get("done") and "stop" or None
                 }
         except httpx.ConnectError as e:
-            logger.error(f"❌ Cannot connect to Ollama server at {api_url}")
+            logger.error(f"[OLLAMA] ERROR: Cannot connect to Ollama server at {api_url}")
             return {
                 "error": f"Cannot connect to Ollama server at {self.server_url}. "
                         f"Please check if the server is running and accessible.",
@@ -135,7 +197,7 @@ class OllamaProvider(AIProvider):
             }
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 404:
-                logger.error(f"❌ Model '{model}' not found on server {self.server_name}")
+                logger.error(f"[OLLAMA] ERROR: Model '{model}' not found on server {self.server_name}")
                 return {
                     "error": f"Model '{model}' not found on Ollama server '{self.server_name}'. "
                             f"Please check if the model is installed or use a different model.",
@@ -145,7 +207,7 @@ class OllamaProvider(AIProvider):
                     "server_url": self.server_url
                 }
             else:
-                logger.error(f"❌ HTTP error {e.response.status_code} from server {self.server_name}")
+                logger.error(f"[OLLAMA] ERROR: HTTP error {e.response.status_code} from server {self.server_name}")
                 return {
                     "error": f"HTTP {e.response.status_code} error from Ollama server '{self.server_name}': {e.response.text}",
                     "provider": "ollama",
@@ -157,12 +219,25 @@ class OllamaProvider(AIProvider):
             return self._format_error(e, model)
 
     async def _stream_ollama_api(self, prompt: str, model: str, params: Dict[str, Any]) -> AsyncGenerator[Dict[str, Any], None]:
-        payload_params = params.copy() if params else {}
-        payload_params["stream"] = True
-        payload = {"model": model, "prompt": prompt, **payload_params}
+        import logging
+        logger = logging.getLogger(__name__)
+
+        # Build Ollama options from params
+        options = self._build_ollama_options(params)
+
+        # Build payload with options object (Ollama API format)
+        payload = {
+            "model": model,
+            "prompt": prompt,
+            "stream": True,
+            "options": options  # All params go in options!
+        }
+
         headers = {'Content-Type': 'application/json'}
         if self.api_key:
             headers['Authorization'] = f'Bearer {self.api_key}'
+
+        logger.info(f"[OLLAMA] Streaming Ollama API call with options: {options}")
 
         try:
             async with httpx.AsyncClient(timeout=300.0) as client:
