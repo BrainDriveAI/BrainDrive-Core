@@ -1,8 +1,4 @@
-# 🧠 BrainDrive Local Installation
- 
-> Works on Windows, macOS, and Linux. Follow the steps in order to configure BrainDrive for local development.
- 
----
+Follow the steps in order to configure BrainDrive for local development. Works on Windows, macOS, and Linux. 
  
 ## 1. Before You Begin
  
