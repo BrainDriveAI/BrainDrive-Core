@@ -211,6 +211,29 @@ export const LayoutEngineBase: React.FC<LayoutEngineBaseProps> = React.memo(({
     return stableModuleMapRef.current;
   }, [modules]);
 
+  const resolvePreferredModuleId = useCallback(
+    (moduleConfig?: ModuleConfig | null, layoutItem?: LayoutItem | null): string => {
+      const candidates: Array<unknown> = [
+        moduleConfig?._legacy?.moduleId,
+        moduleConfig?._originalModule?.moduleId,
+        moduleConfig?.moduleId,
+        moduleConfig?.config?.moduleId,
+        layoutItem?.config?._originalModule?.moduleId,
+        layoutItem?.config?.moduleId,
+        layoutItem?.moduleId
+      ];
+
+      for (const candidate of candidates) {
+        if (typeof candidate === 'string' && candidate.trim().length > 0) {
+          return candidate;
+        }
+      }
+
+      return 'unknown';
+    },
+    []
+  );
+
   // Local UI state
   const [selectedItem, setSelectedItem] = useState<string | null>(null);
   const [isDragging, setIsDragging] = useState(false);
@@ -838,11 +861,7 @@ export const LayoutEngineBase: React.FC<LayoutEngineBaseProps> = React.memo(({
           }
         }
 
-        // Extract simple module ID from complex ID - calculate directly to avoid useMemo in render loop
-        // Pattern: BrainDriveBasicAIChat_59898811a4b34d9097615ed6698d25f6_1754507768265
-        // We want: 59898811a4b34d9097615ed6698d25f6
-        const parts = item.moduleId.split('_');
-        const extractedModuleId = parts.length >= 2 ? parts[1] : item.moduleId;
+        const fallbackModuleId = resolvePreferredModuleId(null, item);
 
         // Create stable breakpoint object
         const breakpointConfig = {
@@ -873,7 +892,7 @@ export const LayoutEngineBase: React.FC<LayoutEngineBaseProps> = React.memo(({
             )}
             <LegacyModuleAdapter
               pluginId={fallbackPluginId}
-              moduleId={extractedModuleId}
+              moduleId={fallbackModuleId}
               moduleName={undefined}
               moduleProps={item.config || {}}
               useUnifiedRenderer={true}
@@ -891,6 +910,7 @@ export const LayoutEngineBase: React.FC<LayoutEngineBaseProps> = React.memo(({
 
       const isSelected = selectedItem === item.i;
       const isStudioMode = mode === RenderMode.STUDIO;
+      const resolvedModuleId = resolvePreferredModuleId(module, item);
 
       return (
         <div
@@ -911,17 +931,7 @@ export const LayoutEngineBase: React.FC<LayoutEngineBaseProps> = React.memo(({
           
           <LegacyModuleAdapter
             pluginId={item.pluginId}
-            moduleId={module._legacy?.moduleId || (() => {
-              // Extract simple module ID from complex ID
-              // Pattern: BrainDriveBasicAIChat_59898811a4b34d9097615ed6698d25f6_1754507768265
-              // We want: 59898811a4b34d9097615ed6698d25f6
-              const parts = item.moduleId.split('_');
-              if (parts.length >= 2) {
-                // The module ID is typically the second part (after plugin name)
-                return parts[1];
-              }
-              return item.moduleId; // fallback to original if pattern doesn't match
-            })()}
+            moduleId={resolvedModuleId}
             moduleName={module._legacy?.moduleName}
             moduleProps={module._legacy?.originalConfig || item.config}
             useUnifiedRenderer={true}
@@ -955,6 +965,7 @@ export const LayoutEngineBase: React.FC<LayoutEngineBaseProps> = React.memo(({
     handleItemClick,
     handleItemRemove,
     onItemConfig,
+    resolvePreferredModuleId,
   ]);
 
   // Grid layout props - convert ResponsiveLayouts to react-grid-layout Layouts format
