@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { RenderMode, PageData, BreakpointConfig } from '../types';
+import { RenderMode, PageData, BreakpointConfig, LayoutItem } from '../types';
 import { ResponsiveContainer } from './ResponsiveContainer';
 import { StudioLayoutEngine } from './StudioLayoutEngine';
 import { DisplayLayoutEngine } from './DisplayLayoutEngine';
@@ -39,6 +39,7 @@ export interface UnifiedPageRendererProps {
   onModeChange?: (mode: RenderMode) => void;
   onPageLoad?: (page: PageData) => void;
   onLayoutChange?: (layouts: any) => void;
+  onItemAdd?: (item: LayoutItem) => void;
   onItemSelect?: (itemId: string | null) => void;
   onItemConfig?: (itemId: string) => void;
   onItemRemove?: (itemId: string) => void;
@@ -83,6 +84,7 @@ export const UnifiedPageRenderer: React.FC<UnifiedPageRendererProps> = ({
   onModeChange,
   onPageLoad,
   onLayoutChange,
+  onItemAdd,
   onItemSelect,
   onItemConfig,
   onItemRemove,
@@ -203,6 +205,7 @@ export const UnifiedPageRenderer: React.FC<UnifiedPageRendererProps> = ({
     preloadPlugins,
     pageId: pageData.id || pageId,
     onLayoutChange,
+    onItemAdd,
     onItemSelect,
     onItemConfig,
     onItemRemove,
