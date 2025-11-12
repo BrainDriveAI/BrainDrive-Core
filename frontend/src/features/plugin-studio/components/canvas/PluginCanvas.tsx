@@ -1,10 +1,9 @@
 import React, { useRef, useEffect, useState } from 'react';
-import { Box, Button, Snackbar, Alert } from '@mui/material';
-import SaveIcon from '@mui/icons-material/Save';
+import { Box, Snackbar, Alert } from '@mui/material';
 import { GridToolbar } from '../grid-toolbar';
 import { GridContainer } from './GridContainer';
 import { DropZone } from './DropZone';
-import { usePluginStudio, useViewMode } from '../../hooks';
+import { usePluginStudio } from '../../hooks';
 import { LayoutCommitBadge } from '../../../unified-dynamic-page-renderer/components/LayoutCommitBadge';
 
 /**
@@ -12,8 +11,19 @@ import { LayoutCommitBadge } from '../../../unified-dynamic-page-renderer/compon
  * @returns The plugin canvas component
  */
 export const PluginCanvas: React.FC = () => {
-  const { layouts, handleLayoutChange, handleResizeStart, handleResizeStop, currentPage, savePage } = usePluginStudio();
-  const { viewMode, viewWidth, setContainerWidth } = useViewMode();
+  const {
+    layouts,
+    handleLayoutChange,
+    handleResizeStart,
+    handleResizeStop,
+    currentPage,
+    savePage,
+    canvas,
+    zoom,
+    viewMode,
+    viewWidth,
+    setContainerWidth
+  } = usePluginStudio();
   const containerRef = useRef<HTMLDivElement>(null);
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [saveError, setSaveError] = useState(false);
@@ -44,7 +54,7 @@ export const PluginCanvas: React.FC = () => {
       return () => resizeObserver.disconnect();
     }
   }, [setContainerWidth]);
-  
+
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
       <GridToolbar onSave={handleSave} />
@@ -62,6 +72,9 @@ export const PluginCanvas: React.FC = () => {
             viewMode={viewMode}
             viewWidth={viewWidth}
             newItemId={newItemId}
+            canvasWidth={canvas.width}
+            canvasHeight={canvas.height}
+            zoom={zoom}
           />
         </DropZone>
       </Box>

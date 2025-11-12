@@ -1,7 +1,56 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
-import { Layouts, LayoutItem, GridItem, Page } from '../../types';
+import { Layouts, LayoutItem, GridItem, Page, ModuleDefinition } from '../../types';
 
 const USER_LAYOUT_ORIGINS = new Set(['user-drag', 'user-resize', 'drop-add']);
+
+const stripInternalConfig = (config?: Record<string, any>): Record<string, any> => {
+  if (!config || typeof config !== 'object') {
+    return {};
+  }
+
+  const {
+    _pluginStudioItem,
+    _originalItem,
+    _originalModule,
+    _legacy,
+    ...rest
+  } = config as Record<string, any>;
+
+  return { ...rest };
+};
+
+const inferPluginIdFromModuleKey = (moduleKey?: string): string | undefined => {
+  if (!moduleKey) return undefined;
+  const parts = moduleKey.split('_').filter(Boolean);
+  if (parts.length >= 2) {
+    return `${parts[0]}_${parts[1]}`;
+  }
+  return parts[0];
+};
+
+const extractDefaultsFromDefinition = (moduleDef?: Record<string, any>): Record<string, any> => {
+  if (!moduleDef) return {};
+
+  if (moduleDef.configFields) {
+    return Object.entries(moduleDef.configFields).reduce<Record<string, any>>((acc, [key, field]) => {
+      if (field && typeof field === 'object' && 'default' in field) {
+        acc[key] = (field as Record<string, any>).default;
+      }
+      return acc;
+    }, {});
+  }
+
+  if (moduleDef.props) {
+    return Object.entries(moduleDef.props).reduce<Record<string, any>>((acc, [key, prop]) => {
+      if (prop && typeof prop === 'object' && 'default' in prop) {
+        acc[key] = (prop as Record<string, any>).default;
+      }
+      return acc;
+    }, {});
+  }
+
+  return {};
+};
 
 type LayoutChangeMetadata = {
   version?: number;
@@ -74,6 +123,94 @@ export const useLayout = (
   const pagePersistTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const pendingPersistLayoutsRef = useRef<Layouts | null>(null);
   
+  const syncModulesWithLayouts = useCallback((layoutsToSync: Layouts) => {
+    if (!initialPage) {
+      return;
+    }
+
+    const existingModules = initialPage.modules || {};
+    const nextModules: Record<string, ModuleDefinition> = {};
+    const visited = new Set<string>();
+
+    const mergeModule = (item: GridItem | LayoutItem | any) => {
+      if (!item) return;
+
+      const key = ('moduleUniqueId' in item ? item.moduleUniqueId : item.i) || item.i;
+      if (!key || visited.has(key)) {
+        return;
+      }
+
+      visited.add(key);
+
+      const rawArgs =
+        ('args' in item ? item.args : undefined) ||
+        ('configOverrides' in item ? item.configOverrides : undefined) ||
+        ('config' in item ? item.config : undefined) ||
+        existingModules[key]?.config ||
+        {};
+
+      const cleanedConfig = stripInternalConfig(rawArgs);
+      const previousEntry = existingModules[key];
+      const inferredModuleId =
+        cleanedConfig.moduleId ||
+        ('moduleId' in item ? item.moduleId : undefined) ||
+        previousEntry?.moduleId ||
+        key;
+
+      const candidatePluginId =
+        ('pluginId' in item ? item.pluginId : undefined) ||
+        cleanedConfig.pluginId ||
+        previousEntry?.pluginId ||
+        inferPluginIdFromModuleKey(inferredModuleId) ||
+        inferPluginIdFromModuleKey(key) ||
+        'unknown';
+
+      let mergedConfig = {
+        ...(previousEntry?.config || {}),
+        ...cleanedConfig
+      };
+
+      if (getModuleById && (!previousEntry || Object.keys(previousEntry.config || {}).length === 0)) {
+        const moduleDef = getModuleById(candidatePluginId, inferredModuleId);
+        if (moduleDef) {
+          const defaults = extractDefaultsFromDefinition(moduleDef);
+          mergedConfig = { ...defaults, ...mergedConfig };
+        }
+      }
+
+      nextModules[key] = {
+        pluginId: candidatePluginId,
+        moduleId: inferredModuleId,
+        moduleName: previousEntry?.moduleName || mergedConfig.displayName || mergedConfig.moduleName || key,
+        config: mergedConfig
+      };
+    };
+
+    ['desktop', 'tablet', 'mobile'].forEach(deviceType => {
+      (layoutsToSync[deviceType as keyof Layouts] || []).forEach(mergeModule);
+    });
+
+    const previousHash = JSON.stringify(existingModules);
+    const nextHash = JSON.stringify(nextModules);
+    if (previousHash === nextHash) {
+      return;
+    }
+
+    initialPage.modules = nextModules;
+    if (initialPage.content) {
+      initialPage.content = {
+        ...initialPage.content,
+        modules: JSON.parse(JSON.stringify(nextModules)),
+        layouts: initialPage.content.layouts || initialPage.layouts
+      };
+    } else {
+      initialPage.content = {
+        layouts: initialPage.layouts,
+        modules: JSON.parse(JSON.stringify(nextModules))
+      };
+    }
+  }, [initialPage, getModuleById]);
+
   const commitLayoutsToPage = useCallback((validatedLayouts: Layouts) => {
     if (!initialPage) {
       return;
@@ -164,11 +301,12 @@ export const useLayout = (
     
     // Validate the layouts
     const validatedLayouts = validateLayouts(newLayouts);
+    syncModulesWithLayouts(validatedLayouts);
 
     // Update state with validated layouts
     setLayouts(validatedLayouts);
     schedulePagePersistence(validatedLayouts, { immediate: options?.forcePersist ?? false });
-  }, [schedulePagePersistence]);
+  }, [schedulePagePersistence, syncModulesWithLayouts]);
 
   const handleLayoutChange = useCallback((layout: any[], newLayouts: Layouts, metadata?: LayoutChangeMetadata) => {
     // Phase 1: Log layout change event

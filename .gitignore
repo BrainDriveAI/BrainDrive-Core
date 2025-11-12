@@ -127,13 +127,8 @@ backend/plugins/*
 # IDE / EDITORS
 # ----------------------------------------
 
-# VSCode (keep some shared settings)
-.vscode/*
-!.vscode/settings.json
-!.vscode/tasks.json
-!.vscode/launch.json
-!.vscode/extensions.json
-!.vscode/*.code-snippets
+# VSCode workspace settings
+.vscode/
 
 # JetBrains IDEs
 .idea/
@@ -214,6 +209,7 @@ Reports/
 
 
 
+
 # Design assets
 design/
 Design/
@@ -221,9 +217,6 @@ Design/
 **/Design/
 **/design
 **/Design
-
-
-
 
 # Plugin Workspace
 PluginBuild/

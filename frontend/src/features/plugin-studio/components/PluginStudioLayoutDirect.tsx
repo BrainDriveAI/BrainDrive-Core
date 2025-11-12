@@ -1,7 +1,7 @@
 import React, { useCallback, useMemo } from 'react';
 import { Box } from '@mui/material';
 import { UnifiedPageRenderer } from '../../unified-dynamic-page-renderer/components/UnifiedPageRenderer';
-import { RenderMode, PageData, ResponsiveLayouts } from '../../unified-dynamic-page-renderer/types';
+import { RenderMode, PageData, ResponsiveLayouts, LayoutItem } from '../../unified-dynamic-page-renderer/types';
 import { PluginToolbar } from './toolbar/PluginToolbar';
 import { GridToolbar } from './grid-toolbar/GridToolbar';
 import { usePluginStudio } from '../hooks/usePluginStudio';
@@ -15,6 +15,49 @@ import {
 } from './dialogs';
 import { ErrorBoundary, LoadingIndicator } from './common';
 import { DebugInfo } from './DebugInfo';
+import { ModuleDefinition, DynamicModuleConfig } from '../types';
+
+const sanitizeModuleConfig = (config?: Record<string, any>): Record<string, any> => {
+  if (!config || typeof config !== 'object') {
+    return {};
+  }
+
+  const {
+    _originalItem,
+    _pluginStudioItem,
+    _originalModule,
+    _legacy,
+    ...rest
+  } = config as Record<string, any>;
+
+  return { ...rest };
+};
+
+const getDefaultConfigFromDefinition = (moduleDef?: DynamicModuleConfig): Record<string, any> => {
+  if (!moduleDef) {
+    return {};
+  }
+
+  if (moduleDef.configFields) {
+    return Object.entries(moduleDef.configFields).reduce<Record<string, any>>((acc, [key, field]) => {
+      if (field && typeof field === 'object' && 'default' in field) {
+        acc[key] = (field as Record<string, any>).default;
+      }
+      return acc;
+    }, {});
+  }
+
+  if (moduleDef.props) {
+    return Object.entries(moduleDef.props).reduce<Record<string, any>>((acc, [key, prop]) => {
+      if (prop && typeof prop === 'object' && 'default' in prop) {
+        acc[key] = (prop as Record<string, any>).default;
+      }
+      return acc;
+    }, {});
+  }
+
+  return {};
+};
 
 /**
  * Plugin Studio Layout - PURE UNIFIED ARCHITECTURE
@@ -39,11 +82,16 @@ export const PluginStudioLayoutDirect: React.FC = () => {
     layouts,
     handleLayoutChange,
     savePage,
+
+    // Plugin registry
+    availablePlugins,
     
     // UI state
     selectedItem,
     setSelectedItem,
     previewMode,
+    zoom,
+    canvas,
     
     // Dialog state
     configDialogOpen,
@@ -94,6 +142,72 @@ export const PluginStudioLayoutDirect: React.FC = () => {
     }
   }, [currentPage, layouts]);
 
+  const buildModuleEntryFromLayout = useCallback((item: LayoutItem): ModuleDefinition | null => {
+    if (!item) {
+      return null;
+    }
+
+    const pluginId = item.pluginId;
+    const moduleId = item.moduleId;
+
+    if (!pluginId || !moduleId) {
+      console.warn('[PluginStudioLayoutDirect] Unable to build module entry - missing plugin/module id', item);
+      return null;
+    }
+
+    const plugin = availablePlugins.find(pluginConfig => pluginConfig.id === pluginId);
+    const moduleDefinition = plugin?.modules?.find(mod => mod.id === moduleId || mod.name === moduleId);
+
+    const defaultConfig = getDefaultConfigFromDefinition(moduleDefinition);
+    const sanitizedConfig = sanitizeModuleConfig(item.config as Record<string, any>);
+    const mergedConfig = { ...defaultConfig, ...sanitizedConfig };
+
+    const moduleEntry: ModuleDefinition = {
+      pluginId,
+      moduleId,
+      moduleName: moduleDefinition?.displayName || moduleDefinition?.name || (mergedConfig.displayName as string) || moduleId,
+      config: mergedConfig,
+      _moduleUpdated: Date.now()
+    };
+
+    return moduleEntry;
+  }, [availablePlugins]);
+
+  const handleUnifiedItemAdd = useCallback((item: LayoutItem) => {
+    const moduleEntry = buildModuleEntryFromLayout(item);
+    if (!moduleEntry) {
+      return;
+    }
+
+    const moduleKey = item.i;
+    console.log('[PluginStudioLayoutDirect] Adding module entry for', moduleKey, moduleEntry);
+
+    setCurrentPage(prev => {
+      if (!prev) {
+        return prev;
+      }
+
+      const nextModules = {
+        ...(prev.modules || {}),
+        [moduleKey]: moduleEntry
+      };
+
+      const nextContentModules = {
+        ...(prev.content?.modules || {}),
+        [moduleKey]: moduleEntry
+      };
+
+      return {
+        ...prev,
+        modules: nextModules,
+        content: {
+          ...(prev.content || {}),
+          modules: nextContentModules
+        }
+      };
+    });
+  }, [buildModuleEntryFromLayout, setCurrentPage]);
+
   // Handle layout changes from UnifiedPageRenderer
   const handleUnifiedLayoutChange = useCallback((unifiedLayouts: ResponsiveLayouts) => {
     try {
@@ -116,28 +230,33 @@ export const PluginStudioLayoutDirect: React.FC = () => {
       // This preserves all existing save logic and state management
       handleLayoutChange(unifiedLayouts.desktop, pluginStudioLayouts);
       
-      // 🔧 FIX: Update currentPage.layouts AND content.layouts to ensure saves work
-      if (currentPage) {
-        const updatedPage = {
-          ...currentPage,
+      // Keep current page state in sync without clobbering modules created via onItemAdd
+      setCurrentPage(prev => {
+        if (!prev) {
+          return prev;
+        }
+        
+        const preservedModules = prev.content?.modules || prev.modules || {};
+        
+        const nextPage = {
+          ...prev,
           layouts: pluginStudioLayouts,
           content: {
-            ...currentPage.content,
+            ...(prev.content || {}),
             layouts: pluginStudioLayouts,
-            modules: currentPage.content?.modules || currentPage.modules || {}
+            modules: preservedModules
           }
         };
-        setCurrentPage(updatedPage);
-        console.log('[PluginStudioLayoutDirect] Updated currentPage.layouts and content.layouts for save functionality');
-        console.log('[PluginStudioLayoutDirect] Updated page layouts:', updatedPage.layouts);
-        console.log('[PluginStudioLayoutDirect] Updated page content.layouts:', updatedPage.content?.layouts);
-      }
+        
+        console.log('[PluginStudioLayoutDirect] Updated page layouts/content layouts in state');
+        return nextPage;
+      });
       
       console.log('[PluginStudioLayoutDirect] Layout change processed successfully');
     } catch (error) {
       console.error('[PluginStudioLayoutDirect] Failed to process layout changes:', error);
     }
-  }, [handleLayoutChange, currentPage, setCurrentPage]);
+  }, [handleLayoutChange, setCurrentPage]);
 
   // Handle module selection from UnifiedPageRenderer
   const handleItemSelect = useCallback((itemId: string | null) => {
@@ -153,10 +272,43 @@ export const PluginStudioLayoutDirect: React.FC = () => {
 
   // Handle module removal
   const handleItemRemove = useCallback((itemId: string) => {
-    // This will be handled by the existing Plugin Studio logic
-    // through the context's removeItem function
     console.log('[PluginStudioLayoutDirect] Remove item:', itemId);
-  }, []);
+
+    setCurrentPage(prev => {
+      if (!prev) {
+        return prev;
+      }
+
+      const candidateKeys = [itemId, itemId.replace(/_/g, '')];
+      const nextModules = { ...(prev.modules || {}) };
+      const nextContentModules = { ...(prev.content?.modules || {}) };
+      let mutated = false;
+
+      candidateKeys.forEach(key => {
+        if (key && key in nextModules) {
+          delete nextModules[key];
+          mutated = true;
+        }
+        if (key && key in nextContentModules) {
+          delete nextContentModules[key];
+          mutated = true;
+        }
+      });
+
+      if (!mutated) {
+        return prev;
+      }
+
+      return {
+        ...prev,
+        modules: nextModules,
+        content: {
+          ...(prev.content || {}),
+          modules: nextContentModules
+        }
+      };
+    });
+  }, [setCurrentPage]);
 
   // Handle errors from UnifiedPageRenderer
   const handleError = useCallback((error: Error) => {
@@ -237,9 +389,16 @@ export const PluginStudioLayoutDirect: React.FC = () => {
               pageData={unifiedPageData}
               mode={previewMode ? RenderMode.PREVIEW : RenderMode.STUDIO}
               responsive={true}
+              studioScale={zoom}
+              studioCanvasWidth={canvas?.width}
+              studioCanvasHeight={canvas?.height}
               onLayoutChange={(layouts) => {
                 console.log('[PluginStudioLayoutDirect] UnifiedPageRenderer onLayoutChange called with:', layouts);
                 handleUnifiedLayoutChange(layouts);
+              }}
+              onItemAdd={(item) => {
+                console.log('[PluginStudioLayoutDirect] UnifiedPageRenderer onItemAdd called with:', item);
+                handleUnifiedItemAdd(item);
               }}
               onItemSelect={(itemId) => {
                 console.log('[PluginStudioLayoutDirect] UnifiedPageRenderer onItemSelect called with:', itemId);

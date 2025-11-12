@@ -127,12 +127,12 @@ export function useUnifiedLayoutState(options: UnifiedLayoutStateOptions = {}): 
     const isUserAction = event.origin.source === 'user-drag' ||
                          event.origin.source === 'user-resize' ||
                          event.origin.source === 'user-remove' ||
-                         event.origin.source === 'drop-add';
+                         event.origin.source === 'drop-add' ||
+                         event.origin.source === 'user-bounce-recovery';
     
     // For resize operations, force persist even if hash appears same (dimensions might differ)
     const shouldPersist = onLayoutPersistRef.current &&
-                         isUserAction &&
-                         (event.hash !== lastPersistedHashRef.current || event.origin.source === 'user-resize');
+                         (event.hash !== lastPersistedHashRef.current || isUserAction);
     
     if (shouldPersist) {
       try {
@@ -162,7 +162,14 @@ export function useUnifiedLayoutState(options: UnifiedLayoutStateOptions = {}): 
         };
         layoutCommitTracker.recordCommit(commitMeta);
         
-        onLayoutPersistRef.current!(event.layouts, event.origin);
+        const firstDesktopItem = event.layouts.desktop?.[0];
+        console.log('[UnifiedLayoutState] Persist dispatch', JSON.stringify({
+          source: event.origin.source,
+          version: commitMeta.version,
+          hash: event.hash,
+          firstDesktop: firstDesktopItem ? { id: firstDesktopItem.i, x: firstDesktopItem.x, y: firstDesktopItem.y } : null
+        }));
+        onLayoutPersistRef.current!(event.layouts, { ...event.origin, version: commitMeta.version });
         lastPersistedHashRef.current = event.hash;
         
         // PHASE B: Update committed version when persisting user changes
@@ -233,12 +240,16 @@ export function useUnifiedLayoutState(options: UnifiedLayoutStateOptions = {}): 
       }
       return;
     }
-    const version = origin.version || lastCommittedVersionRef.current + 1;
+    const version = origin.version ?? lastCommittedVersionRef.current + 1;
     layoutCommitTracker.trackPending(version, hash);
     
     // Queue the layout change with appropriate debounce key
     const debounceKey = origin.operationId || origin.source;
-    layoutChangeManagerRef.current.queueLayoutChange(newLayouts, origin, debounceKey, options?.debounceMs);
+    const originWithVersion: LayoutChangeOrigin = {
+      ...origin,
+      version
+    };
+    layoutChangeManagerRef.current.queueLayoutChange(newLayouts, originWithVersion, debounceKey, options?.debounceMs);
   }, []); // Now has no dependencies - completely stable!
 
   // Reset layouts function (for page changes, etc.)
