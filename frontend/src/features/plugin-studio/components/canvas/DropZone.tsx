@@ -105,13 +105,8 @@ export const DropZone: React.FC<DropZoneProps> = ({ children, onNewItem }) => {
       const uniqueId = `${moduleData.pluginId}_${moduleData.moduleId}_${Date.now()}`;
       
       // Calculate width and height based on available properties
-      const width = moduleLayout?.defaultWidth ||
-                   moduleLayout?.minWidth ||
-                   viewModeConfig.defaultItemSize.w;
-                   
-      const height = moduleLayout?.defaultHeight ||
-                    moduleLayout?.minHeight ||
-                    viewModeConfig.defaultItemSize.h;
+      let width = moduleLayout?.defaultWidth || moduleLayout?.minWidth || viewModeConfig.defaultItemSize.w;
+      let height = moduleLayout?.defaultHeight || moduleLayout?.minHeight || viewModeConfig.defaultItemSize.h;
       
       console.log('Adding item to layout:', {
         uniqueId,

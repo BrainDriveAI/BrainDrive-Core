@@ -45,7 +45,7 @@ export const VIEW_MODE_LAYOUTS: ViewModeConfigs = {
   },
   desktop: {
     cols: 12,
-    rowHeight: 70,
+    rowHeight: 60,
     margin: [0, 0],
     padding: [0, 0],
     defaultItemSize: {
@@ -55,7 +55,7 @@ export const VIEW_MODE_LAYOUTS: ViewModeConfigs = {
   },
   custom: {
     cols: 12,
-    rowHeight: 70,
+    rowHeight: 60,
     margin: [0, 0],
     padding: [0, 0],
     defaultItemSize: {

@@ -1,6 +1,7 @@
 import React from 'react';
 import { Box, Divider, Tooltip, IconButton, Chip } from '@mui/material';
 import { ViewModeSelector } from './ViewModeSelector';
+import { ZoomControls } from './ZoomControls';
 import { PageSelector } from './PageSelector';
 import { ToolbarActions } from './ToolbarActions';
 import { usePluginStudio } from '../../hooks';
@@ -249,11 +250,12 @@ export const GridToolbar: React.FC<GridToolbarProps> = ({ onSave }) => {
       </Box>
       
       {/* Middle Section: View Mode Controls */}
-      <Box sx={{ display: 'flex', alignItems: 'center', flex: '0 1 auto', mx: 2 }}>
+      <Box sx={{ display: 'flex', alignItems: 'center', flex: '0 1 auto', mx: 2, gap: 2 }}>
         <ViewModeSelector
           viewMode={viewMode}
           onViewModeChange={setViewMode}
         />
+        <ZoomControls />
       </Box>
       
       {/* Right Section: Function Controls */}

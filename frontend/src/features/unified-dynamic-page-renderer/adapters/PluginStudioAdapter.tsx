@@ -46,6 +46,14 @@ export interface PluginStudioAdapterProps {
   enableUnifiedFeatures?: boolean;
   fallbackToLegacy?: boolean;
   performanceMonitoring?: boolean;
+
+  // Studio canvas state
+  zoom?: number;
+  canvas?: {
+    width?: number;
+    height?: number;
+  };
+  onAutoFitScale?: (scale: number) => void;
 }
 
 /**
@@ -70,12 +78,19 @@ export const PluginStudioAdapter: React.FC<PluginStudioAdapterProps> = ({
   setSelectedItem,
   enableUnifiedFeatures = true,
   fallbackToLegacy = false,
-  performanceMonitoring = import.meta.env.MODE === 'development'
+  performanceMonitoring = import.meta.env.MODE === 'development',
+  zoom = 1,
+  canvas,
+  onAutoFitScale,
 }) => {
   // Get Material-UI theme for dark mode support
   const theme = useTheme();
   // Get dev mode features - MUST be called before any conditional returns
   const { features: devModeFeatures } = usePluginStudioDevMode();
+  const DEFAULT_CANVAS_WIDTH = 1440;
+  const DEFAULT_CANVAS_HEIGHT = 2400;
+  const canvasWidth = canvas?.width ?? DEFAULT_CANVAS_WIDTH;
+  const canvasHeight = canvas?.height ?? DEFAULT_CANVAS_HEIGHT;
   
   // Phase 1: Add debug mode flag
   const isDebugMode = import.meta.env.VITE_LAYOUT_DEBUG === 'true';
@@ -87,8 +102,12 @@ export const PluginStudioAdapter: React.FC<PluginStudioAdapterProps> = ({
   // Safeguard to prevent infinite loops during module updates
   const isUpdatingModulesRef = useRef(false);
   
-  // Quick Mitigation: Add ref to store unified layout state
-  const unifiedLayoutStateRef = useRef<any>(null);
+  // Track latest committed responsive layouts for authoritative saves
+  const committedLayoutsRef = useRef<{
+    layouts: ResponsiveLayouts;
+    hash: string;
+    timestamp: number;
+  } | null>(null);
 
   // Performance tracking
   const [performanceMetrics, setPerformanceMetrics] = useState<{
@@ -96,6 +115,28 @@ export const PluginStudioAdapter: React.FC<PluginStudioAdapterProps> = ({
     renderTime?: number;
     lastUpdate: number;
   }>({ lastUpdate: Date.now() });
+  const canvasHostRef = useRef<HTMLDivElement | null>(null);
+  const cloneLayouts = useCallback((layouts: ResponsiveLayouts): ResponsiveLayouts => {
+    return JSON.parse(JSON.stringify(layouts));
+  }, []);
+
+  useEffect(() => {
+    if (!onAutoFitScale) return;
+    const node = canvasHostRef.current;
+    if (!node) return;
+
+    const observer = new ResizeObserver(entries => {
+      const entry = entries[0];
+      if (!entry) return;
+      const width = entry.contentRect.width;
+      if (width > 0 && canvasWidth > 0) {
+        onAutoFitScale(width / canvasWidth);
+      }
+    });
+
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [onAutoFitScale, canvasWidth]);
 
 
   // Handle module selection from unified renderer
@@ -282,13 +323,20 @@ export const PluginStudioAdapter: React.FC<PluginStudioAdapterProps> = ({
       // Phase 1: Log conversion event
       const hash = metadata?.hash || generateLayoutHash(unifiedLayouts);
       const version = metadata?.version || 0;
+      committedLayoutsRef.current = {
+        layouts: cloneLayouts(unifiedLayouts),
+        hash,
+        timestamp: Date.now()
+      };
       
-      if (isDebugMode) {
-        console.log(`[PluginStudioAdapter] Convert v${version} hash:${hash}`, {
-          origin: metadata?.origin,
-          timestamp: Date.now()
-        });
-      }
+      const firstDesktop = unifiedLayouts.desktop?.[0];
+      console.log('[PluginStudioAdapter] Unified layout change received', JSON.stringify({
+        version,
+        hash,
+        origin: metadata?.origin?.source,
+        firstDesktop: firstDesktop ? { id: firstDesktop.i, x: firstDesktop.x, y: firstDesktop.y } : null,
+        timestamp: Date.now()
+      }));
       // Phase 5: Always update converted page data with new layouts to ensure saves use latest state
       // The UnifiedLayoutState already handles deduplication, so we should trust its updates
       setConvertedPageData(prev => {
@@ -372,6 +420,14 @@ export const PluginStudioAdapter: React.FC<PluginStudioAdapterProps> = ({
 
       // Call onLayoutChange immediately to persist changes
       // Pass the layout for the active PS breakpoint (desktop), using 'wide' as fallback
+      console.log('[PluginStudioAdapter] Forwarding layout change to Plugin Studio host', JSON.stringify({
+        hash,
+        firstDesktop: pluginStudioLayouts.desktop?.[0] ? {
+          id: pluginStudioLayouts.desktop[0].i,
+          x: pluginStudioLayouts.desktop[0].x,
+          y: pluginStudioLayouts.desktop[0].y
+        } : null
+      }));
       onLayoutChange(desktopUnified, pluginStudioLayouts);
       
       // Phase 1: Log successful conversion
@@ -391,7 +447,7 @@ export const PluginStudioAdapter: React.FC<PluginStudioAdapterProps> = ({
       console.error('[PluginStudioAdapter] Failed to convert layout changes:', error);
       onError?.(error as Error);
     }
-  }, [onLayoutChange, layouts, onError, isDebugMode]);
+  }, [onLayoutChange, layouts, onError, isDebugMode, cloneLayouts]);
 
   /**
    * Handle unified page load events
@@ -489,49 +545,6 @@ export const PluginStudioAdapter: React.FC<PluginStudioAdapterProps> = ({
     return previewMode ? RenderMode.PREVIEW : RenderMode.STUDIO;
   }, [previewMode]);
 
-  // Phase 3: Add method to get committed Plugin Studio layouts
-  const getCommittedPluginStudioLayouts = useCallback((): PluginStudioLayouts | null => {
-    // Get committed layouts from unified state if available
-    const committedLayouts = unifiedLayoutStateRef.current?.getCommittedLayouts?.();
-    if (!committedLayouts) {
-      console.warn('[PluginStudioAdapter] No committed layouts available from unified state');
-      return null;
-    }
-    
-    // Convert unified layouts to Plugin Studio format
-    const convertUnifiedToPluginStudio = (items: LayoutItem[] = []): (PluginStudioGridItem | any)[] => {
-      return items.map(item => {
-        // Try to restore original item properties
-        const originalItem = item.config?._originalItem;
-        
-        return {
-          ...originalItem,
-          i: item.i,
-          x: item.x,
-          y: item.y,
-          w: item.w,
-          h: item.h,
-          minW: item.minW,
-          minH: item.minH,
-          pluginId: item.pluginId,
-          args: {
-            ...originalItem?.args,
-            ...item.config,
-            // Remove internal properties
-            _pluginStudioItem: undefined,
-            _originalItem: undefined
-          }
-        };
-      });
-    };
-    
-    return {
-      desktop: convertUnifiedToPluginStudio(committedLayouts.desktop),
-      tablet: convertUnifiedToPluginStudio(committedLayouts.tablet),
-      mobile: convertUnifiedToPluginStudio(committedLayouts.mobile)
-    };
-  }, []);
-
   // Handle save functionality for the GridToolbar - MUST be defined before conditional returns
   const handleSave = useCallback(async (pageId?: string) => {
     if (!page || !convertedPageData) {
@@ -542,23 +555,38 @@ export const PluginStudioAdapter: React.FC<PluginStudioAdapterProps> = ({
     try {
       console.log('[PluginStudioAdapter] Starting save operation for page:', pageId || page?.id);
       
-      // RECODE V2 BLOCK: Get committed layouts directly from unified state for accurate dimensions
-      let layoutsToSave = convertedPageData.layouts;
+      const committedSnapshot = committedLayoutsRef.current;
+      if (!committedSnapshot) {
+        const error = new Error('Cannot save - no committed layout snapshot is available yet');
+        console.error('[PluginStudioAdapter] Save aborted:', error.message);
+        onError?.(error);
+        return;
+      }
       
-      // Try to get the committed layouts from unified state
-      const committedLayouts = getCommittedPluginStudioLayouts();
-      if (committedLayouts) {
-        layoutsToSave = committedLayouts as any; // Type cast to match expected format
-        console.log('[RECODE_V2_BLOCK] Using committed layouts from unified state for save');
+      const responsiveLayouts = committedSnapshot.layouts;
+      const snapshotHash = committedSnapshot.hash || generateLayoutHash(responsiveLayouts);
+      const convertedHash = generateLayoutHash(convertedPageData.layouts);
+      const timeSinceCommit = Date.now() - committedSnapshot.timestamp;
+      
+      if (convertedHash !== snapshotHash) {
+        console.warn('[PluginStudioAdapter] Local converted layouts are out of sync with committed snapshot - synchronizing before save', {
+          convertedHash,
+          snapshotHash
+        });
+        setConvertedPageData(prev => prev ? { ...prev, layouts: responsiveLayouts } : prev);
+      }
+      
+      if (timeSinceCommit > 3000) {
+        console.warn('[PluginStudioAdapter] Saving layout snapshot older than 3s', { msSinceCommit: timeSinceCommit });
       } else {
-        console.log('[RECODE_V2_BLOCK] Fallback to convertedPageData layouts for save');
+        console.log('[PluginStudioAdapter] Using fresh committed snapshot for save', { msSinceCommit: timeSinceCommit });
       }
       
       // RECODE V2 BLOCK: Log item dimensions at save time
-      const desktopItems = layoutsToSave?.desktop || [];
+      const desktopItems = responsiveLayouts?.desktop || [];
       console.log('[RECODE_V2_BLOCK] PluginStudioAdapter save - item dimensions', {
         pageId: pageId || page?.id,
-        source: committedLayouts ? 'committed' : 'convertedPageData',
+        source: 'committed-snapshot',
         desktopItemDimensions: desktopItems.map((item: any) => ({
           id: item.i,
           dimensions: { w: item.w, h: item.h, x: item.x, y: item.y }
@@ -567,7 +595,7 @@ export const PluginStudioAdapter: React.FC<PluginStudioAdapterProps> = ({
       });
       
       // Phase 5: Generate hash for save tracing
-      const layoutStr = JSON.stringify(layoutsToSave);
+      const layoutStr = JSON.stringify(responsiveLayouts);
       let hash = 0;
       for (let i = 0; i < layoutStr.length; i++) {
         const char = layoutStr.charCodeAt(i);
@@ -605,14 +633,14 @@ export const PluginStudioAdapter: React.FC<PluginStudioAdapterProps> = ({
       };
 
       // Plugin Studio has no 'wide' breakpoint; map unified 'wide' into 'desktop' when needed
-      const desktopSaveSource = (layoutsToSave.desktop && layoutsToSave.desktop.length > 0)
-        ? layoutsToSave.desktop
-        : (layoutsToSave.wide || []);
+      const desktopSaveSource = (responsiveLayouts.desktop && responsiveLayouts.desktop.length > 0)
+        ? responsiveLayouts.desktop
+        : (responsiveLayouts.wide || []);
 
       const pluginStudioLayouts: PluginStudioLayouts = {
         desktop: convertUnifiedToPluginStudio(desktopSaveSource),
-        tablet: convertUnifiedToPluginStudio(layoutsToSave.tablet),
-        mobile: convertUnifiedToPluginStudio(layoutsToSave.mobile)
+        tablet: convertUnifiedToPluginStudio(responsiveLayouts.tablet),
+        mobile: convertUnifiedToPluginStudio(responsiveLayouts.mobile)
       };
 
       console.log('[PluginStudioAdapter] Converted layouts for save:', pluginStudioLayouts);
@@ -703,11 +731,26 @@ export const PluginStudioAdapter: React.FC<PluginStudioAdapterProps> = ({
       <GridToolbar onSave={handleSave} />
       
       {/* Use the full UnifiedPageRenderer but hide the mode controller with CSS */}
-      <div
-        style={{ height: '100%', width: '100%', flex: 1, overflow: 'hidden' }}
-      >
+      <div className="plugin-studio-adapter__canvas">
         <style>
           {`
+            .plugin-studio-adapter__canvas {
+              flex: 1;
+              position: relative;
+              overflow: hidden;
+            }
+
+            .plugin-studio-adapter__canvas-inner {
+              position: absolute;
+              inset: 0;
+              overflow: auto;
+              background-image:
+                linear-gradient(to right, ${theme.palette.mode === 'dark' ? '#424242' : '#d0d0d0'} 1px, transparent 1px),
+                linear-gradient(to bottom, ${theme.palette.mode === 'dark' ? '#424242' : '#d0d0d0'} 1px, transparent 1px);
+              background-size: 20px 20px;
+              background-color: ${theme.palette.mode === 'dark' ? '#1d2332' : '#f5f5f5'};
+            }
+
             /* Hide the unified renderer mode controller and editing tools */
             .unified-page-renderer .mode-controller,
             .unified-page-renderer .studio-mode-controller,
@@ -719,14 +762,31 @@ export const PluginStudioAdapter: React.FC<PluginStudioAdapterProps> = ({
               display: none !important;
             }
 
-            /* Ensure unified container never exceeds its parent width */
-            .unified-page-renderer,
-            .unified-page-renderer .layout-engine,
-            .unified-page-renderer .responsive-container {
+            /* Ensure unified container never exceeds its parent width within studio */
+            .plugin-studio-adapter .unified-page-renderer,
+            .plugin-studio-adapter .unified-page-renderer .layout-engine,
+            .plugin-studio-adapter .unified-page-renderer .responsive-container,
+            .plugin-studio-adapter .unified-page-renderer .layout-engine-inner {
               height: 100% !important;
               width: 100% !important;
-              max-width: 100% !important;
-              overflow-x: hidden !important;
+              max-width: none !important;
+            }
+
+            .plugin-studio-adapter .unified-page-renderer .layout-engine-container {
+              height: 100% !important;
+              width: 100% !important;
+              overflow: visible !important;
+            }
+
+            .plugin-studio-adapter .unified-page-renderer .layout-engine-center {
+              justify-content: flex-start !important;
+              width: 100% !important;
+            }
+
+            .plugin-studio-adapter .unified-page-renderer .layout-engine-inner {
+              margin: 0 !important;
+              padding: 0 !important;
+              max-width: none !important;
             }
 
             /* Create expandable grid background like legacy Plugin Studio - Theme aware */
@@ -750,10 +810,10 @@ export const PluginStudioAdapter: React.FC<PluginStudioAdapterProps> = ({
 
             /* Ensure the grid container can expand beyond viewport */
             .unified-page-renderer .react-grid-layout {
-              min-height: 100vh !important;
+              min-height: ${canvasHeight}px !important;
               position: relative !important;
-              width: 100% !important;
-              max-width: 100% !important;
+              width: ${canvasWidth}px !important;
+              min-width: ${canvasWidth}px !important;
               overflow-x: hidden !important;
             }
 
@@ -952,22 +1012,32 @@ export const PluginStudioAdapter: React.FC<PluginStudioAdapterProps> = ({
           `}
         </style>
         
-        <UnifiedPageRenderer
-          pageData={convertedPageData}
-          mode={renderMode}
-          allowUnpublished={true}
-          responsive={true}
-          // Plugin Studio editing: disable container queries to avoid accidental
-          // breakpoint flips on first interaction due to container reflow.
-          containerQueries={false}
-          lazyLoading={true}
-          onPageLoad={handleUnifiedPageLoad}
-          onLayoutChange={handleUnifiedLayoutChange}
-          onItemSelect={handleUnifiedModuleSelect}
-          onItemConfig={handleModuleConfig}
-          onItemRemove={handleModuleDelete}
-          onError={onError}
-        />
+        <div
+          ref={canvasHostRef}
+          style={{ flex: 1, overflow: 'auto' }}
+        >
+        <div className="plugin-studio-adapter__canvas-inner">
+          <UnifiedPageRenderer
+            pageData={convertedPageData}
+            mode={renderMode}
+            allowUnpublished={true}
+            responsive={true}
+            // Plugin Studio editing: disable container queries to avoid accidental
+            // breakpoint flips on first interaction due to container reflow.
+            containerQueries={false}
+            lazyLoading={true}
+            onPageLoad={handleUnifiedPageLoad}
+            onLayoutChange={handleUnifiedLayoutChange}
+            onItemSelect={handleUnifiedModuleSelect}
+            onItemConfig={handleModuleConfig}
+            onItemRemove={handleModuleDelete}
+            onError={onError}
+            studioScale={zoom}
+            studioCanvasWidth={canvasWidth}
+            studioCanvasHeight={canvasHeight}
+          />
+        </div>
+      </div>
       </div>
 
       {/* Performance overlay in development */}

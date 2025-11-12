@@ -1,7 +1,14 @@
 import { ResponsiveLayouts, LayoutItem } from '../types';
 
 export interface LayoutChangeOrigin {
-  source: 'user-drag' | 'user-resize' | 'user-remove' | 'external-sync' | 'initial-load' | 'drop-add';
+  source:
+    | 'user-drag'
+    | 'user-resize'
+    | 'user-remove'
+    | 'user-bounce-recovery'
+    | 'external-sync'
+    | 'initial-load'
+    | 'drop-add';
   timestamp: number;
   operationId?: string;
   version?: number; // PHASE B: Add version field for stale update detection
@@ -147,7 +154,11 @@ export class LayoutChangeManager {
       });
     }
 
-    const isUserOrigin = origin.source === 'user-drag' || origin.source === 'user-resize' || origin.source === 'drop-add';
+    const isUserOrigin =
+      origin.source === 'user-drag' ||
+      origin.source === 'user-resize' ||
+      origin.source === 'user-bounce-recovery' ||
+      origin.source === 'drop-add';
     const effectiveDebounce = typeof debounceOverride === 'number'
       ? debounceOverride
       : (isUserOrigin ? 0 : this.debounceMs);
@@ -223,7 +234,11 @@ export class LayoutChangeManager {
    */
   private shouldBlockChange(origin: LayoutChangeOrigin): boolean {
     // Don't block user-initiated changes
-    if (origin.source === 'user-drag' || origin.source === 'user-resize') {
+    if (
+      origin.source === 'user-drag' ||
+      origin.source === 'user-resize' ||
+      origin.source === 'user-bounce-recovery'
+    ) {
       return false;
     }
     
