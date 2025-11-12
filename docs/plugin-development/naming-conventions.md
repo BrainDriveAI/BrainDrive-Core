@@ -262,10 +262,13 @@ Your `webpack.config.js` must match your `lifecycle_manager.py`:
 
 ```javascript
 // webpack.config.js
+const PLUGIN_NAME = "CollectionViewer";
+const PLUGIN_MODULE_NAME = "CollectionViewerModule";  // Must match lifecycle_manager.py
+
 new ModuleFederationPlugin({
-  name: "CollectionViewer",  // Must match plugin_data.scope from lifecycle_manager.py
+  name: PLUGIN_NAME,  // Plugin scope - matches plugin_data.scope from lifecycle_manager.py
   exposes: {
-    "./CollectionViewer": "./src/index"  // Plugin scope
+    [`./` + PLUGIN_MODULE_NAME]: "./src/index"  // ✅ CRITICAL: Use module name, NOT plugin name
   }
 })
 ```
@@ -273,11 +276,21 @@ new ModuleFederationPlugin({
 ```python
 # lifecycle_manager.py
 self.plugin_data = {
+    "name": "CollectionViewer",
     "scope": "CollectionViewer"  # Must match webpack name
 }
+
+self.module_data = [
+    {
+        "name": "CollectionViewerModule"  # Must match webpack exposes path
+    }
+]
 ```
 
-If `module_name == plugin_scope`, Module Federation can't resolve exports correctly.
+**Critical Rules:**
+- Webpack `name` field = `plugin_data["scope"]` (plugin name)
+- Webpack `exposes` path = `module_data["name"]` (module name)
+- These **must be different** or Module Federation can't resolve exports correctly
 
 ---
 
@@ -437,9 +450,11 @@ class YourPluginLifecycleManager(BaseLifecycleManager):
 
 ---
 
-## Checklist for lifecycle_manager.py
+## Checklist for Plugin Development
 
-Before deploying your plugin, verify in your `lifecycle_manager.py`:
+Before deploying your plugin, verify **BOTH** files are correctly configured:
+
+### lifecycle_manager.py Checklist
 
 - [ ] `self.plugin_data["name"]` is set to your plugin name
 - [ ] `self.module_data[0]["name"]` is **different** from plugin name
@@ -448,6 +463,25 @@ Before deploying your plugin, verify in your `lifecycle_manager.py`:
 - [ ] `plugin_data["plugin_slug"]` is unique across all plugins
 - [ ] All module names are unique within the plugin
 - [ ] `display_name` is user-friendly (can match plugin name)
+
+### webpack.config.js Checklist
+
+- [ ] `PLUGIN_NAME` constant is defined (matches `plugin_data["scope"]`)
+- [ ] `PLUGIN_MODULE_NAME` constant is defined (matches `module_data["name"]`)
+- [ ] `PLUGIN_MODULE_NAME` is **different** from `PLUGIN_NAME`
+- [ ] `exposes` section uses `PLUGIN_MODULE_NAME`, NOT `PLUGIN_NAME`
+- [ ] ModuleFederationPlugin `name` field uses `PLUGIN_NAME`
+
+**Example:**
+```javascript
+const PLUGIN_NAME = "MyPlugin";              // Matches plugin_data["scope"]
+const PLUGIN_MODULE_NAME = "MyPluginModule"; // Matches module_data["name"]
+
+exposes: {
+  [`./` + PLUGIN_MODULE_NAME]: "./src/index"  // ✅ Correct
+  // NOT: [`./` + PLUGIN_NAME]: "./src/index" // ❌ Wrong
+}
+```
 
 ---
 
