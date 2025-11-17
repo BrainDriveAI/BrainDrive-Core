@@ -60,8 +60,8 @@ export const DynamicRoutes: React.FC<DynamicRoutesProps> = ({ basePath = '' }) =
       {/* Index route for the pages section */}
       <Route index element={
         <BannerPage 
-          routeName="Your Pages 1"
-          routeDescription="This is where you can view and manage your pages."
+          routeName=""
+          routeDescription="Goto BrainDrive Page Builder to create and manage unique pages for each of your AI use cases."
           showHelp={false}
         />
       } />
