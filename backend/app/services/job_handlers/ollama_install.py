@@ -7,6 +7,7 @@ import httpx
 
 from app.services.job_manager import BaseJobHandler, JobExecutionContext
 from app.utils.ollama import normalize_server_base
+from app.utils.ollama_progress import OllamaPullTracker
 
 
 class OllamaInstallHandler(BaseJobHandler):
@@ -40,6 +41,7 @@ class OllamaInstallHandler(BaseJobHandler):
 
         timeout_seconds = int(payload.get("timeout_seconds", self.default_config["timeout_seconds"]))
         timeout = httpx.Timeout(timeout_seconds, connect=30.0)
+        tracker = OllamaPullTracker()
 
         await context.report_progress(
             percent=0,
@@ -71,7 +73,6 @@ class OllamaInstallHandler(BaseJobHandler):
                         data={"force_reinstall": force_reinstall, "progress_percent": 1},
                     )
 
-                    last_logged_bucket = -1
                     async for line in response.aiter_lines():
                         await context.check_for_cancel()
                         if not line:
@@ -87,54 +88,31 @@ class OllamaInstallHandler(BaseJobHandler):
                             if data.get("error"):
                                 raise RuntimeError(str(data["error"]))
 
-                            if "status" in data:
-                                progress_value = data.get("progress")
-                                percent: Optional[int] = None
-                                if progress_value is not None:
-                                    try:
-                                        percent = int(progress_value)
-                                    except (ValueError, TypeError):
-                                        percent = None
-                                if percent is None:
-                                    total = data.get("total")
-                                    completed = data.get("completed")
-                                    if isinstance(total, (int, float)) and total:
-                                        try:
-                                            ratio = float(completed or 0) / float(total)
-                                            percent = int(max(0.0, min(0.99, ratio)) * 100)
-                                        except (ValueError, TypeError, ZeroDivisionError):
-                                            percent = None
-                                if percent is not None:
-                                    percent = max(1, min(99, percent))
-                                if percent is not None:
-                                    bucket = percent // 5
-                                    if bucket > last_logged_bucket:
-                                        last_logged_bucket = bucket
-                                        self.logger.info(
-                                            "Ollama install progress %s%% [%s]",
-                                            percent,
-                                            data.get("status"),
-                                        )
-                                event_payload = {
-                                    **data,
-                                    "progress_percent": percent,
-                                }
-                                await context.report_progress(
-                                    percent=percent,
-                                    stage="downloading",
-                                    message=str(data["status"]),
-                                    data=event_payload,
+                            snapshot = tracker.process_payload(data)
+                            percent = snapshot.percent
+                            stage = snapshot.stage or "downloading"
+                            message = snapshot.message or stage
+                            if snapshot.bucket_changed and percent is not None:
+                                self.logger.info(
+                                    "Ollama install progress %s%% [%s]",
+                                    percent,
+                                    data.get("status"),
                                 )
+                            await context.report_progress(
+                                percent=percent,
+                                stage=stage,
+                                message=message,
+                                data=snapshot.payload,
+                            )
 
-                            completed_flag = bool(data.get("completed")) or bool(data.get("done"))
                             status_text = str(data.get("status", "")).strip().lower()
+                            completed_flag = bool(data.get("done"))
                             if completed_flag or status_text == "success":
-                                finalizing_payload = {
-                                    **data,
-                                    "progress_percent": 99,
-                                    "stage": "finalizing",
-                                    "message": "Download completed, finalizing installation",
-                                }
+                                finalizing_payload = tracker.build_progress_payload(
+                                    percent=99,
+                                    stage="finalizing",
+                                    message="Download completed, finalizing installation",
+                                )
                                 await context.report_progress(
                                     percent=99,
                                     stage="finalizing",
@@ -147,12 +125,12 @@ class OllamaInstallHandler(BaseJobHandler):
                                     model_name,
                                     digest=str(data.get("digest")) if data.get("digest") else None,
                                 )
-                                completed_payload = {
-                                    **metadata,
-                                    "progress_percent": 100,
-                                    "stage": "completed",
-                                    "message": "Model installed successfully",
-                                }
+                                completed_payload = tracker.build_progress_payload(
+                                    percent=100,
+                                    stage="completed",
+                                    message="Model installed successfully",
+                                )
+                                completed_payload.update(metadata)
                                 await context.report_progress(
                                     percent=100,
                                     stage="completed",
@@ -171,12 +149,12 @@ class OllamaInstallHandler(BaseJobHandler):
                 raise RuntimeError(f"Ollama request failed: {exc}") from exc
 
         metadata = await self._wait_for_model_registration(server_base, headers, model_name, digest=None)
-        completed_payload = {
-            **metadata,
-            "progress_percent": 100,
-            "stage": "completed",
-            "message": "Model installed successfully",
-        }
+        completed_payload = tracker.build_progress_payload(
+            percent=100,
+            stage="completed",
+            message="Model installed successfully",
+        )
+        completed_payload.update(metadata)
         await context.report_progress(
             percent=100,
             stage="completed",

@@ -149,7 +149,10 @@ class JobManager:
         try:
             yield session
         finally:
-            await session.close()
+            try:
+                await asyncio.shield(session.close())
+            except Exception:
+                logger.exception("Failed to close async session cleanly")
 
     async def start(self) -> None:
         """Start the background worker loop."""

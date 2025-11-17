@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
   Box,
@@ -35,6 +35,20 @@ interface JobListResponse {
   total: number;
 }
 
+interface JobEventPayload {
+  job_id: string;
+  job_type?: string;
+  status?: string;
+  current_stage?: string | null;
+  stage?: string | null;
+  message?: string | null;
+  progress_percent?: number | null;
+  progress_bucket?: number | null;
+  event_type?: string;
+  timestamp?: string;
+  data?: Record<string, unknown>;
+}
+
 const STATUS_TO_COLOR: Record<string, 'default' | 'primary' | 'success' | 'error' | 'warning' | 'info'> = {
   queued: 'default',
   waiting: 'info',
@@ -48,6 +62,8 @@ const JOB_TYPE_LABELS: Record<string, string> = {
   'ollama.install': 'Model Install',
   'system.sleep': 'System Check',
 };
+
+const TERMINAL_JOB_STATUSES = new Set(['completed', 'failed', 'canceled']);
 
 const formatDateTime = (value?: string | null) => {
   if (!value) {
@@ -72,6 +88,7 @@ const TasksPage: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [actionLoading, setActionLoading] = useState<Record<string, string>>({});
+  const streamControllers = useRef<Record<string, () => void>>({});
 
   const fetchJobs = useCallback(async () => {
     if (!apiService) {
@@ -103,6 +120,118 @@ const TasksPage: React.FC = () => {
       window.currentPageTitle = undefined;
     };
   }, []);
+
+  const stopStream = useCallback((jobId: string) => {
+    const disposer = streamControllers.current[jobId];
+    if (!disposer) {
+      return;
+    }
+    delete streamControllers.current[jobId];
+    try {
+      disposer();
+    } catch (err) {
+      console.warn(`Failed to close SSE stream for job ${jobId}`, err);
+    }
+  }, []);
+
+  const applyJobEvent = useCallback(
+    (payload: JobEventPayload) => {
+      if (!payload?.job_id) {
+        return;
+      }
+      setJobs((prev) => {
+        let mutated = false;
+        const nextJobs = prev.map((job) => {
+          if (job.id !== payload.job_id) {
+            return job;
+          }
+          const nextStage = payload.stage ?? payload.current_stage ?? job.current_stage ?? null;
+          const nextMessage = payload.message ?? job.message ?? null;
+          const nextProgress =
+            typeof payload.progress_percent === 'number' ? payload.progress_percent : job.progress_percent;
+          const nextStatus = payload.status ?? job.status;
+
+          const updatedJob: JobResponse = {
+            ...job,
+            status: nextStatus,
+            current_stage: nextStage,
+            message: nextMessage,
+            progress_percent: nextProgress ?? job.progress_percent,
+            updated_at: payload.timestamp ?? job.updated_at,
+          };
+          mutated = true;
+          return updatedJob;
+        });
+        return mutated ? nextJobs : prev;
+      });
+
+      if (
+        (payload.status && TERMINAL_JOB_STATUSES.has(payload.status)) ||
+        payload.event_type === 'terminal'
+      ) {
+        stopStream(payload.job_id);
+      }
+    },
+    [stopStream],
+  );
+
+  const handleStreamMessage = useCallback(
+    (raw: string) => {
+      if (!raw) {
+        return;
+      }
+      try {
+        const payload = JSON.parse(raw) as JobEventPayload;
+        if (payload?.job_id) {
+          applyJobEvent(payload);
+        }
+      } catch (err) {
+        console.error('Failed to parse job stream payload', err, raw);
+      }
+    },
+    [applyJobEvent],
+  );
+
+  useEffect(() => {
+    if (!apiService) {
+      return;
+    }
+    const activeJobIds = new Set<string>();
+
+    jobs.forEach((job) => {
+      if (TERMINAL_JOB_STATUSES.has(job.status)) {
+        stopStream(job.id);
+        return;
+      }
+
+      activeJobIds.add(job.id);
+      if (!streamControllers.current[job.id]) {
+        const disposer = apiService.subscribeToSse(`/api/v1/jobs/${job.id}/events/stream`, {
+          onMessage: handleStreamMessage,
+          onError: (err) => {
+            console.error(`Job ${job.id} stream error`, err);
+            stopStream(job.id);
+          },
+          onClose: () => {
+            delete streamControllers.current[job.id];
+          },
+        });
+        streamControllers.current[job.id] = disposer;
+      }
+    });
+
+    Object.keys(streamControllers.current).forEach((jobId) => {
+      if (!activeJobIds.has(jobId)) {
+        stopStream(jobId);
+      }
+    });
+  }, [apiService, jobs, handleStreamMessage, stopStream]);
+
+  useEffect(() => {
+    return () => {
+      Object.keys(streamControllers.current).forEach((jobId) => stopStream(jobId));
+    };
+  }, [stopStream]);
 
   const handleRetry = useCallback(async (jobId: string) => {
     if (!apiService) {
@@ -195,7 +324,7 @@ const TasksPage: React.FC = () => {
               const statusColor = STATUS_TO_COLOR[job.status] ?? 'default';
               const progress = Number.isFinite(job.progress_percent) ? job.progress_percent : undefined;
               const friendlyName = JOB_TYPE_LABELS[job.job_type] || job.job_type;
-              const isTerminal = ['completed', 'failed', 'canceled'].includes(job.status);
+              const isTerminal = TERMINAL_JOB_STATUSES.has(job.status);
               const isRetryable = ['failed', 'canceled'].includes(job.status);
               const jobAction = actionLoading[job.id];
               return (
