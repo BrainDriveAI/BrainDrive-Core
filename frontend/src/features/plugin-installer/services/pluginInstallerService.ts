@@ -578,6 +578,9 @@ class PluginInstallerService {
               // No error - this is expected and valid
             } else {
               // It's likely a function component - try to call it
+              // TODO: Consider removing this direct call approach. Calling components directly
+              // can fail with hooks, trigger side effects (API calls, state changes), and doesn't
+              // test the real render environment. Simply checking typeof === 'function' may be sufficient.
               try {
                 const testProps = {};
                 const result = module.component(testProps);
@@ -587,6 +590,12 @@ class PluginInstallerService {
                   // This is a class component that wasn't detected properly
                   componentCreated = true;
                   // No error - this is expected and valid for class components
+                } else if (funcError.message.includes('Invalid hook call') ||
+                           funcError.message.includes('Rendered fewer hooks') ||
+                           funcError.message.includes('hooks can only be called')) {
+                  // Functional components with hooks cannot be called directly (hooks need React render context).
+                  // This is expected behavior - treat as valid since the component will work when properly rendered.
+                  componentCreated = true;
                 } else {
                   error = `Function component test failed: ${funcError.message}`;
                 }

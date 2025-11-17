@@ -198,7 +198,6 @@ export const UnifiedPageRenderer: React.FC<UnifiedPageRendererProps> = ({
 
   const engineKey = pageData?.id || pageId || route;
   const engineCommonProps = {
-    key: engineKey,
     layouts: pageData.layouts,
     modules: pageData.modules,
     lazyLoading,
@@ -250,25 +249,27 @@ export const UnifiedPageRenderer: React.FC<UnifiedPageRendererProps> = ({
                 >
                   {currentMode === RenderMode.STUDIO ? (
                     <StudioLayoutEngine
+                      key={engineKey}
                       {...engineCommonProps}
                       canvasScale={studioScale}
                       canvasWidth={studioCanvasWidth}
                       canvasHeight={studioCanvasHeight}
                     />
                   ) : (
-                    <DisplayLayoutEngine {...engineCommonProps} mode={currentMode} />
+                    <DisplayLayoutEngine key={engineKey} {...engineCommonProps} mode={currentMode} />
                   )}
                 </ResponsiveContainer>
               ) : (
                 currentMode === RenderMode.STUDIO ? (
                   <StudioLayoutEngine
+                    key={engineKey}
                     {...engineCommonProps}
                     canvasScale={studioScale}
                     canvasWidth={studioCanvasWidth}
                     canvasHeight={studioCanvasHeight}
                   />
                 ) : (
-                  <DisplayLayoutEngine {...engineCommonProps} mode={currentMode} />
+                  <DisplayLayoutEngine key={engineKey} {...engineCommonProps} mode={currentMode} />
                 )
               )}
             </>
