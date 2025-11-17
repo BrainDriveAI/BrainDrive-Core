@@ -10,12 +10,15 @@ import {
   useTheme,
   Avatar,
   Divider,
+  ListItemIcon,
 } from '@mui/material';
 import MenuIcon from '@mui/icons-material/Menu';
 import MenuOpenIcon from '@mui/icons-material/MenuOpen';
+import TaskAltIcon from '@mui/icons-material/TaskAlt';
 import { useAuth } from '../../contexts/AuthContext';
 import { useLocation } from 'react-router-dom';
 import { useSettings } from '../../contexts/ServiceContext';
+import { useNavigate } from 'react-router-dom';
 
 // Declare a global interface for the Window object
 declare global {
@@ -37,6 +40,7 @@ const Header = ({ onToggleSidebar, rightContent, sidebarOpen }: HeaderProps) => 
   const { user, logout } = useAuth();
   const location = useLocation();
   const settingsService = useSettings();
+  const navigate = useNavigate();
 
   type BrandingLogo = { light: string; dark: string; alt?: string };
   const defaultBranding: BrandingLogo = {
@@ -262,9 +266,20 @@ const Header = ({ onToggleSidebar, rightContent, sidebarOpen }: HeaderProps) => 
           transformOrigin={{ horizontal: 'right', vertical: 'top' }}
           anchorOrigin={{ horizontal: 'right', vertical: 'bottom' }}
         >
+          <MenuItem
+            onClick={() => {
+              handleClose();
+              navigate('/tasks');
+            }}
+          >
+            <ListItemIcon>
+              <TaskAltIcon fontSize="small" />
+            </ListItemIcon>
+            My Tasks
+          </MenuItem>
           <MenuItem onClick={() => {
             handleClose();
-            window.location.href = '/profile';
+            navigate('/profile');
           }}>
             <Avatar>{user?.username?.[0]?.toUpperCase() || 'U'}</Avatar>
             Profile

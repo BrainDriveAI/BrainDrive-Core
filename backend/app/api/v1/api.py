@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from app.api.v1.endpoints import auth, settings, ollama, ai_providers, ai_provider_settings, navigation_routes, components, conversations, tags, personas, plugin_state, demo, searxng, documents
+from app.api.v1.endpoints import auth, settings, ollama, ai_providers, ai_provider_settings, navigation_routes, components, conversations, tags, personas, plugin_state, demo, searxng, documents, jobs
 from app.routers import plugins
 from app.routes.pages import router as pages_router
 
@@ -18,6 +18,7 @@ api_router.include_router(plugin_state.router, tags=["plugin-state"])
 api_router.include_router(demo.router, tags=["demo"])
 api_router.include_router(searxng.router, prefix="/searxng", tags=["searxng"])
 api_router.include_router(documents.router, prefix="/documents", tags=["documents"])
+api_router.include_router(jobs.router, tags=["jobs"])
 # Include the plugins router (which already includes the lifecycle router)
 api_router.include_router(plugins.router, tags=["plugins"])
 api_router.include_router(pages_router)

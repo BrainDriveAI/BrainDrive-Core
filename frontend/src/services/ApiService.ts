@@ -747,6 +747,58 @@ class ApiService extends AbstractBaseService {
       });
     });
   }
+
+  public subscribeToSse(
+    path: string,
+    handlers: {
+      onOpen?: (response: Response) => void | Promise<void>;
+      onMessage?: (data: string) => void;
+      onError?: (error: unknown) => void;
+      onClose?: () => void;
+    } = {}
+  ): () => void {
+    const baseURL = this.api.defaults.baseURL || '';
+    const url = `${baseURL}${path}`;
+    const token = localStorage.getItem('accessToken');
+    const controller = new AbortController();
+
+    fetchEventSource(url, {
+      method: 'GET',
+      headers: {
+        'Accept': 'text/event-stream',
+        ...(token ? { Authorization: `Bearer ${token}` } : {})
+      },
+      signal: controller.signal,
+      openWhenHidden: true,
+      async onopen(response: Response): Promise<void> {
+        const type = response.headers.get('content-type') || '';
+        if (!response.ok || !type.includes('text/event-stream')) {
+          const error = new Error(`Unexpected response: ${response.status} ${type}`);
+          handlers.onError?.(error);
+          controller.abort();
+          return Promise.resolve();
+        }
+        if (handlers.onOpen) {
+          await handlers.onOpen(response);
+        }
+        return Promise.resolve();
+      },
+      onmessage(event) {
+        handlers.onMessage?.(event.data);
+      },
+      onerror(err) {
+        handlers.onError?.(err);
+        throw err;
+      },
+      onclose() {
+        handlers.onClose?.();
+      }
+    });
+
+    return () => {
+      controller.abort();
+    };
+  }
   
   
 

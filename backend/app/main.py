@@ -6,6 +6,7 @@ from app.api.v1.api import api_router
 from app.core.config import settings
 from app.routers.plugins import plugin_manager
 from app.plugins.service_installler.start_stop_plugin_services import start_plugin_services_on_startup, stop_all_plugin_services_on_shutdown
+from app.core.job_manager_provider import initialize_job_manager, shutdown_job_manager
 import logging
 import time
 import structlog
@@ -32,6 +33,7 @@ async def startup_event():
     await init_ollama_settings()
     # Start plugin services
     await start_plugin_services_on_startup()
+    await initialize_job_manager()
     logger.info("Settings initialization completed")
 
 
@@ -42,6 +44,7 @@ async def shutdown_event():
     logger.info("Shutting down application and stopping plugin services...")
     # Stop all plugin services gracefully
     await stop_all_plugin_services_on_shutdown()
+    await shutdown_job_manager()
     logger.info("Application shutdown completed.")
 
 

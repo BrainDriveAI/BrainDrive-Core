@@ -23,6 +23,16 @@ from app.models.tenant_models import (
     Session,
     OAuthAccount
 )
+from app.models.job import (
+    Job,
+    JobAttempt,
+    JobProgressEvent,
+    JobDependency,
+    JobSubscription,
+    JobTypeDefinition,
+    WorkerCapability,
+    JobStatus,
+)
 
 # Import relationships module last to establish relationships
 from app.models.relationships import *

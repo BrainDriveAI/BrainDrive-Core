@@ -7,12 +7,15 @@ from typing import Optional, List, Dict, Any, AsyncGenerator
 from pydantic import BaseModel, AnyHttpUrl
 from urllib.parse import unquote
 from sqlalchemy.ext.asyncio import AsyncSession
+
 from app.core.database import get_db
+from app.core.job_manager_provider import get_job_manager
+from app.core.security import get_current_user
+from app.models.job import Job, JobStatus
 from app.models.settings import SettingDefinition, SettingScope
-from dataclasses import dataclass, field
-from collections import deque
-import time
-import uuid
+from app.models.user import User
+from app.services.job_manager import HandlerRegistrationError, JobManager
+from app.utils.ollama import normalize_server_base, make_dedupe_key
 
 router = APIRouter()
 
@@ -25,260 +28,75 @@ class ModelInstallRequest(BaseModel):
     server_url: str
     api_key: Optional[str] = None
     stream: Optional[bool] = True
+    force_reinstall: bool = False
 
 class ModelDeleteRequest(BaseModel):
     name: str
     server_url: str
     api_key: Optional[str] = None
 
-# -----------------------------
-# In-memory background job model
-# -----------------------------
-
-TERMINAL_STATES = {"completed", "error", "canceled"}
-
-
-@dataclass
-class InstallTask:
-    task_id: str
-    name: str
-    server_base: str
-    api_key: Optional[str] = None
-    state: str = "queued"  # queued | running | downloading | verifying | extracting | completed | error | canceled
-    progress: int = 0
-    message: str = ""
-    error: Optional[str] = None
-    created_at: float = field(default_factory=lambda: time.time())
-    updated_at: float = field(default_factory=lambda: time.time())
-    dedupe_key: str = ""
-    ring_buffer: deque = field(default_factory=lambda: deque(maxlen=200))
-    subscribers: set = field(default_factory=set)  # Set[asyncio.Queue]
-    cancel_event: asyncio.Event = field(default_factory=asyncio.Event)
-    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+INSTALL_JOB_TYPE = "ollama.install"
+TERMINAL_JOB_STATUSES = {
+    JobStatus.COMPLETED.value,
+    JobStatus.FAILED.value,
+    JobStatus.CANCELED.value,
+}
 
 
-# Global registries (single-process)
-TASKS: Dict[str, InstallTask] = {}
-MODEL_TO_TASK: Dict[str, str] = {}
-SEMAPHORE = asyncio.Semaphore(1)  # Limit concurrent downloads
-TASK_TTL_SECONDS = 60 * 10  # keep finished tasks for 10 minutes
+def _map_job_status_to_legacy(job: Job) -> str:
+    if job.status == JobStatus.QUEUED.value:
+        return "queued"
+    if job.status == JobStatus.RUNNING.value:
+        stage = (job.current_stage or "").lower()
+        if stage in {"downloading", "verifying", "extracting", "finalizing"}:
+            return stage
+        return "running"
+    if job.status == JobStatus.COMPLETED.value:
+        return "completed"
+    if job.status == JobStatus.FAILED.value:
+        return "error"
+    if job.status == JobStatus.CANCELED.value:
+        return "canceled"
+    return "queued"
 
 
-def normalize_server_base(url: str) -> str:
-    url = unquote(url).strip()
-    url = url.rstrip("/")
-    # Remove common suffixes to get the base host
-    if url.endswith("/api/pull"):
-        url = url[: -len("/api/pull")]
-    if url.endswith("/api"):
-        url = url[: -len("/api")]
-    return url
-
-
-def make_dedupe_key(server_base: str, name: str) -> str:
-    return f"{server_base}|{name}"
-
-
-async def emit_event(task: InstallTask, payload: Dict[str, Any]) -> None:
-    payload = {
-        "task_id": task.task_id,
-        "name": task.name,
-        "state": task.state,
-        "progress": task.progress,
-        "message": task.message,
-        **payload,
+def _serialize_install_job(job: Job) -> Dict[str, Any]:
+    payload = job.payload or {}
+    return {
+        "task_id": job.id,
+        "name": payload.get("model_name"),
+        "server_base": payload.get("server_url"),
+        "state": _map_job_status_to_legacy(job),
+        "progress": job.progress_percent,
+        "message": job.message or "",
+        "error": job.error_message,
+        "created_at": job.created_at.timestamp() if job.created_at else None,
+        "updated_at": job.updated_at.timestamp() if job.updated_at else None,
     }
-    line = json.dumps(payload)
-    # Append to ring buffer
-    task.ring_buffer.append(line)
-    # Fan-out to subscribers
-    stale: List[asyncio.Queue] = []
-    for q in list(task.subscribers):
-        try:
-            q.put_nowait(line)
-        except Exception:
-            stale.append(q)
-    for q in stale:
-        task.subscribers.discard(q)
 
 
-def is_terminal(task: InstallTask) -> bool:
-    return task.state in TERMINAL_STATES
+def _serialize_install_event(job: Job, event) -> Dict[str, Any]:
+    payload = _serialize_install_job(job)
+    data = getattr(event, "data", {}) or {}
+    if "stage" in data:
+        payload["state"] = data["stage"]
+    if "message" in data:
+        payload["message"] = data["message"]
+    if "progress_percent" in data:
+        payload["progress"] = data["progress_percent"]
+    payload.update({k: v for k, v in data.items() if k not in {"model_name", "server_url"}})
+    payload["event_type"] = event.event_type
+    payload["sequence_number"] = event.sequence_number
+    payload["timestamp"] = event.timestamp.isoformat()
+    return payload
 
 
-def cleanup_tasks() -> None:
-    now = time.time()
-    to_delete = []
-    for tid, t in TASKS.items():
-        if is_terminal(t) and now - t.updated_at > TASK_TTL_SECONDS:
-            to_delete.append(tid)
-    for tid in to_delete:
-        task = TASKS.pop(tid, None)
-        if task:
-            MODEL_TO_TASK.pop(task.dedupe_key, None)
-
-
-async def run_install_worker(task: InstallTask) -> None:
-    pull_url = f"{task.server_base}/api/pull"
-    headers = {"Content-Type": "application/json"}
-    if task.api_key:
-        headers["Authorization"] = f"Bearer {task.api_key}"
-
-    async with task.lock:
-        task.state = "queued"
-        task.message = "Queued"
-        task.updated_at = time.time()
-    await emit_event(task, {})
-
-    async with SEMAPHORE:
-        # Start streaming download (always attempt; Ollama will be fast if it already exists)
-        async with httpx.AsyncClient(timeout=1800.0, follow_redirects=False) as client:
-            try:
-                # Indicate connection is starting
-                async with task.lock:
-                    task.state = "running"
-                    task.message = "Connecting to Ollama"
-                    task.updated_at = time.time()
-                await emit_event(task, {})
-
-                async with client.stream(
-                    "POST", pull_url, headers=headers, json={"name": task.name, "stream": True}
-                ) as resp:
-                    # Emit HTTP status event
-                    await emit_event(task, {"http_status": resp.status_code})
-                    if resp.status_code != 200:
-                        # Extract error
-                        text = await resp.aread()
-                        err = text.decode(errors="ignore") if isinstance(text, (bytes, bytearray)) else str(text)
-                        async with task.lock:
-                            task.state = "error"
-                            task.error = f"Ollama server error: {err or resp.status_code}"
-                            task.message = "Failed"
-                            task.updated_at = time.time()
-                        await emit_event(task, {})
-                        return
-
-                    async with task.lock:
-                        task.state = "downloading"
-                        task.message = "Starting download"
-                        task.updated_at = time.time()
-                    await emit_event(task, {})
-
-                    had_lines = False
-                    succeeded = False
-                    async for line in resp.aiter_lines():
-                        had_lines = True
-                        if line.strip():
-                            pass
-                        if task.cancel_event.is_set():
-                            try:
-                                await resp.aclose()
-                            except Exception:
-                                pass
-                            async with task.lock:
-                                task.state = "canceled"
-                                task.message = "Canceled"
-                                task.updated_at = time.time()
-                            await emit_event(task, {})
-                            return
-
-                        if not line:
-                            continue
-                        try:
-                            data = json.loads(line)
-                        except json.JSONDecodeError:
-                            # Pass-through text
-                            data = {"raw": line}
-
-                        # Handle explicit error from Ollama
-                        if isinstance(data, dict) and data.get("error"):
-                            async with task.lock:
-                                task.state = "error"
-                                task.error = str(data.get("error"))
-                                task.message = "Failed"
-                                task.updated_at = time.time()
-                            await emit_event(task, {"raw": data})
-                            break
-
-                        # Update progress heuristics
-                        status = str(data.get("status") or data.get("message") or "").lower()
-                        total = data.get("total")
-                        completed = data.get("completed")
-                        prog = task.progress
-                        state_update = None
-                        if isinstance(total, (int, float)) and isinstance(completed, (int, float)) and total:
-                            # Use floor to avoid premature 100% before success is emitted
-                            prog = int(max(0, min(100, (completed * 100.0) // total)))
-                            state_update = "downloading"
-                        else:
-                            if "verifying" in status:
-                                prog = max(prog, 90)
-                                state_update = "verifying"
-                            elif "writing" in status or "extract" in status:
-                                prog = max(prog, 95)
-                                state_update = "extracting"
-                            elif "success" in status:
-                                prog = 100
-                                state_update = "completed"
-                                succeeded = True
-
-                        async with task.lock:
-                            if state_update:
-                                task.state = state_update
-                            task.progress = prog
-                            task.message = data.get("status") or data.get("message") or task.message
-                            task.updated_at = time.time()
-
-                        await emit_event(task, {"raw": data})
-
-                        # Only break on explicit success or completed state
-                        if task.state == "completed" or ("success" in status):
-                            break
-
-                    # Finalize
-                    async with task.lock:
-                        if task.state not in TERMINAL_STATES:
-                            if succeeded:
-                                task.state = "completed"
-                                task.progress = 100
-                                task.message = "Completed"
-                            else:
-                                # No success observed; treat as error to avoid false positives
-                                if not had_lines:
-                                    task.error = "No progress received from Ollama stream"
-                                else:
-                                    task.error = task.error or "Install did not complete successfully"
-                                task.state = "error"
-                                task.message = "Failed"
-                            task.updated_at = time.time()
-                    await emit_event(task, {})
-            except httpx.TimeoutException:
-                async with task.lock:
-                    task.state = "error"
-                    task.error = "Connection timed out"
-                    task.message = "Failed"
-                    task.updated_at = time.time()
-                await emit_event(task, {})
-            except httpx.ConnectError:
-                async with task.lock:
-                    task.state = "error"
-                    task.error = "Could not connect to server"
-                    task.message = "Failed"
-                    task.updated_at = time.time()
-                await emit_event(task, {})
-            except httpx.RequestError as e:
-                async with task.lock:
-                    task.state = "error"
-                    task.error = f"Error connecting to Ollama server: {str(e)}"
-                    task.message = "Failed"
-                    task.updated_at = time.time()
-                await emit_event(task, {})
-            finally:
-                # Cleanup dedupe map when terminal
-                if is_terminal(task):
-                    MODEL_TO_TASK.pop(task.dedupe_key, None)
-                cleanup_tasks()
-
+def _ensure_install_job(job: Optional[Job], user: User) -> Job:
+    if not job or job.job_type != INSTALL_JOB_TYPE:
+        raise HTTPException(status_code=404, detail="Task not found")
+    if job.user_id != str(user.id):
+        raise HTTPException(status_code=404, detail="Task not found")
+    return job
 async def ensure_ollama_settings_definition(db: AsyncSession):
     """Ensure the Ollama settings definition exists"""
     definition = await SettingDefinition.get_by_id(db, 'ollama_settings')
@@ -678,114 +496,102 @@ async def check_model_exists(client: httpx.AsyncClient, server_base: str, model_
 @router.post("/install")
 async def install_ollama_model(
     request: ModelInstallRequest,
-    db: AsyncSession = Depends(get_db)
+    current_user: User = Depends(get_current_user),
+    job_manager: JobManager = Depends(get_job_manager),
 ):
-    """Enqueue a background install and return task_id immediately (Redis-free)."""
+    """Enqueue a model installation using the background job system."""
+    server_base = normalize_server_base(request.server_url)
+    if not server_base.startswith(("http://", "https://")):
+        raise HTTPException(status_code=400, detail="Invalid server URL. Must start with http:// or https://")
+
+    payload = {
+        "model_name": request.name,
+        "server_url": server_base,
+        "api_key": request.api_key,
+        "force_reinstall": request.force_reinstall,
+    }
+
+    idempotency_key = make_dedupe_key(server_base, request.name)
     try:
-        server_base = normalize_server_base(request.server_url)
-        if not server_base.startswith(("http://", "https://")):
-            raise HTTPException(status_code=400, detail="Invalid server URL. Must start with http:// or https://")
-
-        dedupe_key = make_dedupe_key(server_base, request.name)
-        # Return existing non-terminal task if present
-        existing_task_id = MODEL_TO_TASK.get(dedupe_key)
-        if existing_task_id:
-            existing = TASKS.get(existing_task_id)
-            if existing and existing.state not in TERMINAL_STATES:
-                return {"task_id": existing.task_id, "deduped": True}
-
-        # Create new task
-        task_id = uuid.uuid4().hex
-        task = InstallTask(
-            task_id=task_id,
-            name=request.name,
-            server_base=server_base,
-            api_key=request.api_key,
-            dedupe_key=dedupe_key,
+        job, created = await job_manager.enqueue_job(
+            job_type=INSTALL_JOB_TYPE,
+            payload=payload,
+            user_id=str(current_user.id),
+            idempotency_key=idempotency_key,
         )
-        TASKS[task_id] = task
-        MODEL_TO_TASK[dedupe_key] = task_id
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except HandlerRegistrationError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
-        # Schedule worker
-        asyncio.create_task(run_install_worker(task))
-
-        return {"task_id": task_id, "deduped": False}
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
+    return {"task_id": job.id, "deduped": not created}
 
 
 @router.get("/install/{task_id}")
-async def get_install_status(task_id: str):
-    task = TASKS.get(task_id)
-    if not task:
-        raise HTTPException(status_code=404, detail="Task not found")
-    return {
-        "task_id": task.task_id,
-        "name": task.name,
-        "server_base": task.server_base,
-        "state": task.state,
-        "progress": task.progress,
-        "message": task.message,
-        "error": task.error,
-        "created_at": task.created_at,
-        "updated_at": task.updated_at,
-    }
+async def get_install_status(
+    task_id: str,
+    current_user: User = Depends(get_current_user),
+    job_manager: JobManager = Depends(get_job_manager),
+):
+    job = await job_manager.get_job(task_id)
+    job = _ensure_install_job(job, current_user)
+    return _serialize_install_job(job)
 
 
 @router.get("/install/{task_id}/events")
-async def stream_install_events(task_id: str):
-    task = TASKS.get(task_id)
-    if not task:
-        raise HTTPException(status_code=404, detail="Task not found")
+async def stream_install_events(
+    task_id: str,
+    current_user: User = Depends(get_current_user),
+    job_manager: JobManager = Depends(get_job_manager),
+):
+    job = await job_manager.get_job(task_id)
+    job = _ensure_install_job(job, current_user)
 
     async def event_generator() -> AsyncGenerator[bytes, None]:
-        q: asyncio.Queue = asyncio.Queue(maxsize=100)
-        # Subscribe
-        task.subscribers.add(q)
-        # subscriber connected (debug removed)
-        # Replay ring buffer first
-        for line in list(task.ring_buffer):
-            yield f"data: {line}\n\n".encode()
-        # If task already finished, end the stream
-        if is_terminal(task):
-            # immediate close on terminal (debug removed)
-            return
+        last_sequence: Optional[int] = None
+        yield f"data: {json.dumps(_serialize_install_job(job))}\n\n".encode()
 
-        try:
-            while True:
-                try:
-                    line = await q.get()
-                except asyncio.CancelledError:
+        while True:
+            events = await job_manager.get_progress_events(task_id, since=last_sequence)
+            if events:
+                job_snapshot = await job_manager.get_job(task_id)
+                if not job_snapshot or job_snapshot.user_id != str(current_user.id) or job_snapshot.job_type != INSTALL_JOB_TYPE:
                     break
-                yield f"data: {line}\n\n".encode()
-                try:
-                    obj = json.loads(line)
-                    if obj.get("state") in TERMINAL_STATES or int(obj.get("progress", 0)) >= 100:
-                        # closing on terminal (debug removed)
-                        break
-                except Exception:
-                    # If parsing fails, keep streaming
-                    pass
-        finally:
-            # Unsubscribe
+                for event in events:
+                    last_sequence = event.sequence_number
+                    payload = _serialize_install_event(job_snapshot, event)
+                    yield f"data: {json.dumps(payload)}\n\n".encode()
+
+            job_snapshot = await job_manager.get_job(task_id)
+            if not job_snapshot or job_snapshot.user_id != str(current_user.id) or job_snapshot.job_type != INSTALL_JOB_TYPE:
+                break
+            if job_snapshot.status in TERMINAL_JOB_STATUSES:
+                yield f"data: {json.dumps(_serialize_install_job(job_snapshot))}\n\n".encode()
+                break
+
             try:
-                task.subscribers.discard(q)
-                # subscriber disconnected (debug removed)
-            except Exception:
-                pass
+                await asyncio.sleep(1)
+            except asyncio.CancelledError:
+                break
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 
 @router.delete("/install/{task_id}")
-async def cancel_install(task_id: str):
-    task = TASKS.get(task_id)
-    if not task:
-        raise HTTPException(status_code=404, detail="Task not found")
-    task.cancel_event.set()
-    return {"task_id": task.task_id, "state": "canceling"}
+async def cancel_install(
+    task_id: str,
+    current_user: User = Depends(get_current_user),
+    job_manager: JobManager = Depends(get_job_manager),
+):
+    job = await job_manager.get_job(task_id)
+    job = _ensure_install_job(job, current_user)
+    canceled = await job_manager.cancel_job(task_id)
+    if not canceled:
+        latest = await job_manager.get_job(task_id)
+        if latest and latest.status in TERMINAL_JOB_STATUSES:
+            return {"task_id": latest.id, "state": _map_job_status_to_legacy(latest)}
+        raise HTTPException(status_code=400, detail="Unable to cancel task")
+    return {"task_id": job.id, "state": "canceling"}
 
 @router.delete("/delete")
 async def delete_ollama_model(
