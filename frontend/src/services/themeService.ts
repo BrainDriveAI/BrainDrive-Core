@@ -27,8 +27,8 @@ class ThemeService extends AbstractBaseService {
       ]
     );
     
-    // Force light theme as default
-    this.currentTheme = 'light';
+    // Default to dark so unauthenticated experiences (login/register) render in dark mode before user prefs load
+    this.currentTheme = 'dark';
   }
 
   public static getInstance(): ThemeService {

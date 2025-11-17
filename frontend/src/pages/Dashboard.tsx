@@ -7,13 +7,102 @@ import {
   Card,
   CardContent,
   CardActionArea,
+  List,
+  ListItemButton,
+  ListItemIcon,
+  ListItemText,
+  Divider,
+  Stack,
 } from '@mui/material';
 import { useNavigate } from 'react-router-dom';
 import ExtensionIcon from '@mui/icons-material/Extension';
 import SettingsIcon from '@mui/icons-material/Settings';
 import BuildIcon from '@mui/icons-material/Build';
+import HomeOutlinedIcon from '@mui/icons-material/HomeOutlined';
+import DescriptionOutlinedIcon from '@mui/icons-material/DescriptionOutlined';
+import GroupsOutlinedIcon from '@mui/icons-material/GroupsOutlined';
+import OpenInNewIcon from '@mui/icons-material/OpenInNew';
+import { alpha, useTheme } from '@mui/material/styles';
 import { useAuth } from '../contexts/AuthContext';
 import { PluginUpdatesPanel, usePluginUpdateFeed } from '../features/plugin-manager';
+
+const ExternalLinksCard = () => {
+  const theme = useTheme();
+  const hoverBg = alpha(theme.palette.primary.main, theme.palette.mode === 'dark' ? 0.16 : 0.08);
+  const focusRing = alpha(theme.palette.primary.main, 0.35);
+
+  const links = [
+    {
+      label: 'BrainDrive Home',
+      href: 'https://www.braindrive.ai/',
+      icon: <HomeOutlinedIcon fontSize="small" />,
+    },
+    {
+      label: 'Documentation',
+      href: 'https://docs.braindrive.ai/',
+      icon: <DescriptionOutlinedIcon fontSize="small" />,
+    },
+    {
+      label: 'Community',
+      href: 'https://community.braindrive.ai/',
+      icon: <GroupsOutlinedIcon fontSize="small" />,
+    },
+  ];
+
+  return (
+    <Card sx={{ height: '100%' }}>
+      <CardContent>
+        <Stack spacing={0.5} sx={{ mb: 1.5 }}>
+          <Typography variant="h6">External Links</Typography>
+          <Typography variant="body2" color="text.secondary">
+            Opens in a new tab
+          </Typography>
+        </Stack>
+        <List disablePadding>
+          {links.map((link, index) => (
+            <React.Fragment key={link.href}>
+              {index > 0 && <Divider component="li" />}
+              <ListItemButton
+                component="a"
+                href={link.href}
+                target="_blank"
+                rel="noopener noreferrer"
+                aria-label={`Open ${link.label} in a new tab`}
+                sx={{
+                  borderRadius: 1,
+                  px: 1,
+                  py: 1.25,
+                  minHeight: 56,
+                  gap: 1,
+                  transition: theme.transitions.create(['background-color', 'color', 'box-shadow'], {
+                    duration: theme.transitions.duration.shorter,
+                  }),
+                  '&:hover': {
+                    backgroundColor: hoverBg,
+                    color: 'primary.main',
+                  },
+                  '&:focus-visible': {
+                    outline: 'none',
+                    backgroundColor: hoverBg,
+                    color: 'primary.main',
+                    boxShadow: `0 0 0 2px ${focusRing}`,
+                  },
+                }}
+              >
+                <ListItemIcon sx={{ minWidth: 36, color: 'inherit' }}>{link.icon}</ListItemIcon>
+                <ListItemText
+                  primary={link.label}
+                  primaryTypographyProps={{ variant: 'body1', fontWeight: 600 }}
+                />
+                <OpenInNewIcon fontSize="small" sx={{ color: 'inherit' }} />
+              </ListItemButton>
+            </React.Fragment>
+          ))}
+        </List>
+      </CardContent>
+    </Card>
+  );
+};
 
 const Dashboard = () => {
   const navigate = useNavigate();
@@ -106,6 +195,9 @@ const Dashboard = () => {
             onDismiss={updateFeed.dismiss}
             onRetry={() => void updateFeed.retry()}
           />
+        </Grid>
+        <Grid item xs={12} md={6}>
+          <ExternalLinksCard />
         </Grid>
       </Grid>
     </Box>

@@ -62,7 +62,7 @@ export const BannerPage: React.FC<BannerPageProps> = ({
       )}
       
       <Typography variant="body1" color="text.primary" sx={{ mt: 2 }}>
-        Visit <Link to="/plugin-studio" style={{ color: theme.palette.primary.main, textDecoration: 'underline' }}>BrainDrive Studio</Link> to create your first page.
+        Visit <Link to="/plugin-studio" style={{ color: theme.palette.primary.main, textDecoration: 'underline' }}>BrainDrive Page Builder</Link> to create your first page.
       </Typography>
       
       {showHelp && (

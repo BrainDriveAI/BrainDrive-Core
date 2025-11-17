@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import ApiService, { User } from '../services/ApiService';
 import { useNavigate } from 'react-router-dom';
-import { useService } from './ServiceContext';
+import { useService, useTheme as useThemeService } from './ServiceContext';
 import { UserSettingsInitService } from '../services/UserSettingsInitService';
 import { UserNavigationInitService } from '../services/UserNavigationInitService';
 
@@ -20,6 +20,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [user, setUser] = useState<User | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const navigate = useNavigate();
+  const themeService = useThemeService();
   const apiService = ApiService.getInstance();
   const userSettingsInitService = useService<UserSettingsInitService>('userSettingsInit');
   const userNavigationInitService = useService<UserNavigationInitService>('userNavigationInit');
@@ -406,8 +407,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   if (isLoading) {
+    const isDark = themeService.getCurrentTheme() === 'dark';
+    const loadingBackground = isDark ? '#0f172a' : '#f5f5f5';
+    const loadingTextPrimary = isDark ? '#f1f5f9' : '#000000';
+    const loadingTextSecondary = isDark ? '#94a3b8' : '#666666';
+
     return (
       <div style={{
+        backgroundColor: loadingBackground,
+        color: loadingTextPrimary,
         display: 'flex',
         justifyContent: 'center',
         alignItems: 'center',
@@ -416,7 +424,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         gap: '16px'
       }}>
         <div style={{ fontSize: '18px', fontWeight: 'bold' }}>Loading...</div>
-        <div style={{ fontSize: '14px', color: '#666' }}>Authenticating your session</div>
+        <div style={{ fontSize: '14px', color: loadingTextSecondary }}>Authenticating your session</div>
       </div>
     );
   }
