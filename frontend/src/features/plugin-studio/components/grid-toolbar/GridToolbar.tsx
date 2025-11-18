@@ -51,6 +51,7 @@ export const GridToolbar: React.FC<GridToolbarProps> = ({ onSave }) => {
     
     // Selection state
     selectedItem,
+    lastSelectedItem,
     setSelectedItem,
     
     // Dialog state
@@ -71,6 +72,7 @@ export const GridToolbar: React.FC<GridToolbarProps> = ({ onSave }) => {
     setSelectedItem(item);
     setConfigDialogOpen(true);
   };
+  const effectiveSelectedItem = selectedItem || lastSelectedItem;
   
   /**
    * Handle opening the JSON view dialog
@@ -261,13 +263,23 @@ export const GridToolbar: React.FC<GridToolbarProps> = ({ onSave }) => {
       {/* Right Section: Function Controls */}
       <Box sx={{ display: 'flex', alignItems: 'center', flex: '1 0 auto', justifyContent: 'flex-end' }}>
         <ToolbarActions
-          selectedItem={selectedItem}
+          selectedItem={effectiveSelectedItem}
           previewMode={previewMode}
           isPagePublished={currentPage?.is_published}
           isLocalPage={currentPage?.is_local}
-          onConfigOpen={handleConfigOpen}
+          onConfigOpen={(item) => {
+            const target = item || effectiveSelectedItem;
+            if (target) {
+              handleConfigOpen(target);
+            }
+          }}
           onJsonViewOpen={handleJsonViewOpen}
-          onRemoveItem={handleRemoveItem}
+          onRemoveItem={(id) => {
+            const targetId = id || effectiveSelectedItem?.i;
+            if (targetId) {
+              handleRemoveItem(targetId);
+            }
+          }}
           onPreviewModeChange={togglePreviewMode}
           onPublishDialogOpen={handlePublishDialogOpen}
           onRouteManagementOpen={handleRouteManagementOpen}

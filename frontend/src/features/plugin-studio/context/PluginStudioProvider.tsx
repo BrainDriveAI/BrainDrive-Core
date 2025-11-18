@@ -107,7 +107,16 @@ export const PluginStudioProvider: React.FC<{ children: React.ReactNode }> = ({ 
   const { availablePlugins } = usePlugins();
   
   // Selection state
-  const [selectedItem, setSelectedItem] = useState<{ i: string } | null>(null);
+  const [selectedItem, setSelectedItemState] = useState<{ i: string } | null>(null);
+  const [lastSelectedItem, setLastSelectedItem] = useState<{ i: string } | null>(null);
+
+  // Keep track of last non-null selection so toolbar can recover if selection is momentarily cleared
+  const setSelectedItem = (item: { i: string } | null) => {
+    setSelectedItemState(item);
+    if (item) {
+      setLastSelectedItem(item);
+    }
+  };
   
   // Dialog state
   const [configDialogOpen, setConfigDialogOpen] = useState(false);
@@ -164,6 +173,7 @@ export const PluginStudioProvider: React.FC<{ children: React.ReactNode }> = ({ 
     
     // Selection state
     selectedItem,
+    lastSelectedItem,
     setSelectedItem,
     
     // Dialog state
@@ -194,7 +204,7 @@ export const PluginStudioProvider: React.FC<{ children: React.ReactNode }> = ({ 
     viewMode, setViewMode, previewMode, togglePreviewMode, viewWidth, containerWidth, setContainerWidth,
     
     // Selection state
-    selectedItem, setSelectedItem,
+    selectedItem, lastSelectedItem, setSelectedItem,
     
     // Dialog state
     configDialogOpen, jsonViewOpen, pageManagementOpen, routeManagementOpen,

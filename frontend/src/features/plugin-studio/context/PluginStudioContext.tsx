@@ -57,6 +57,7 @@ export interface PluginStudioContextType {
   
   // Selection state
   selectedItem: { i: string } | null;
+  lastSelectedItem: { i: string } | null;
   setSelectedItem: (item: { i: string } | null) => void;
   
   // Dialog state
