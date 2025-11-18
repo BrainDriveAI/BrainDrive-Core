@@ -50,8 +50,8 @@ const PersonasPage: React.FC = () => {
   }, []);
 
   const handlePersonaClick = useCallback((persona: Persona) => {
-    console.log(`Persona clicked: ${persona.name}`);
-    navigate(`/personas/${persona.id}`);
+    console.log(`Persona clicked: ${persona.name} (edit)`);
+    navigate(`/personas/${persona.id}/edit`);
   }, [navigate]);
 
   const handleToggleStatus = useCallback(async (persona: Persona, enabled: boolean) => {
