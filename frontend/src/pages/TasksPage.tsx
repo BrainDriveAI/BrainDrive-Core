@@ -65,18 +65,53 @@ const JOB_TYPE_LABELS: Record<string, string> = {
 
 const TERMINAL_JOB_STATUSES = new Set(['completed', 'failed', 'canceled']);
 
-const formatDateTime = (value?: string | null) => {
+const userTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+
+const coerceDate = (value?: string | number | Date | null) => {
   if (!value) {
+    return null;
+  }
+  if (value instanceof Date) {
+    return new Date(value.getTime());
+  }
+  if (typeof value === 'number') {
+    return new Date(value);
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const numeric = Number(trimmed);
+  if (Number.isFinite(numeric)) {
+    return new Date(numeric);
+  }
+
+  // If the timestamp is missing timezone info, assume it was emitted in UTC and normalize
+  // to avoid displaying it as local wall time (which would appear offset to users).
+  const hasTimezone = /([zZ]|[+-]\d{2}:?\d{2})$/.test(trimmed);
+  const normalized = hasTimezone ? trimmed : `${trimmed.replace(/\s+/, 'T')}Z`;
+
+  const parsed = Date.parse(normalized);
+  if (Number.isNaN(parsed)) {
+    return null;
+  }
+  return new Date(parsed);
+};
+
+const formatDateTime = (value?: string | number | Date | null) => {
+  const date = coerceDate(value);
+  if (!date || Number.isNaN(date.getTime())) {
     return '—';
   }
   try {
     return new Intl.DateTimeFormat(undefined, {
       dateStyle: 'medium',
       timeStyle: 'short',
-    }).format(new Date(value));
+      timeZone: userTimeZone,
+    }).format(date);
   } catch (error) {
     console.warn('Failed to format datetime', error);
-    return value;
+    return '—';
   }
 };
 

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   Box,
   Card,
@@ -42,9 +42,28 @@ export const PersonaCard: React.FC<PersonaCardProps> = ({
   const navigate = useNavigate();
   const [anchorEl, setAnchorEl] = useState<null | HTMLElement>(null);
   const menuOpen = Boolean(anchorEl);
-  const handleClick = () => {
+  const clickTimeoutRef = useRef<number | null>(null);
+  const CLICK_DELAY_MS = 350;
+
+  const clearClickTimeout = () => {
+    if (clickTimeoutRef.current) {
+      window.clearTimeout(clickTimeoutRef.current);
+      clickTimeoutRef.current = null;
+    }
+  };
+
+  useEffect(() => {
+    return () => clearClickTimeout();
+  }, []);
+
+  const handleCardClick = () => {
+    clearClickTimeout();
+
     if (onClick) {
-      onClick(persona);
+      clickTimeoutRef.current = window.setTimeout(() => {
+        onClick(persona);
+        clickTimeoutRef.current = null;
+      }, CLICK_DELAY_MS);
     }
   };
 
@@ -76,6 +95,11 @@ export const PersonaCard: React.FC<PersonaCardProps> = ({
     }
   };
 
+  const handleCardDoubleClick = () => {
+    clearClickTimeout();
+    handleEdit();
+  };
+
   // Truncate system prompt for preview
   const truncatedPrompt = persona.system_prompt.length > 100 
     ? persona.system_prompt.substring(0, 100) + '...'
@@ -95,7 +119,8 @@ export const PersonaCard: React.FC<PersonaCardProps> = ({
       }}
     >
       <CardActionArea 
-        onClick={handleClick}
+        onClick={handleCardClick}
+        onDoubleClick={handleCardDoubleClick}
         sx={{ 
           flexGrow: 1,
           display: 'flex',
