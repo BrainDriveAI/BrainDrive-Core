@@ -13,15 +13,20 @@ import {
   IconButton,
   InputAdornment,
   CircularProgress,
-  Avatar
+  Avatar,
+  Drawer,
+  Stack
 } from '@mui/material';
+import { useTheme } from '@mui/material/styles';
 import { Visibility, VisibilityOff, Person, Email, Lock } from '@mui/icons-material';
 import { useAuth } from '../contexts/AuthContext';
 import { useApi } from '../contexts/ServiceContext';
+import { diagnosticsLog, buildDiagnosticsSnapshot, buildIssueText, DiagnosticsSnapshot } from '../utils/diagnostics';
 
 const ProfilePage = () => {
   const { user } = useAuth();
   const apiService = useApi();
+  const theme = useTheme();
   
   // Username update state
   const [username, setUsername] = useState('');
@@ -39,6 +44,11 @@ const ProfilePage = () => {
   const [showCurrentPassword, setShowCurrentPassword] = useState(false);
   const [showNewPassword, setShowNewPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
+  const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
+  const [diagnosticsData, setDiagnosticsData] = useState<DiagnosticsSnapshot | null>(null);
+  const [diagnosticsError, setDiagnosticsError] = useState('');
+  const [diagnosticsLoading, setDiagnosticsLoading] = useState(false);
+  const [copyStatus, setCopyStatus] = useState('');
 
   // Initialize form with user data
   useEffect(() => {
@@ -151,6 +161,65 @@ const ProfilePage = () => {
     } else {
       setShowConfirmPassword(!showConfirmPassword);
     }
+  };
+
+  const loadDiagnostics = async () => {
+    if (!apiService) return;
+    setDiagnosticsLoading(true);
+    setDiagnosticsError('');
+    setCopyStatus('');
+
+    try {
+      const backendResponse = await apiService.get('/api/v1/diagnostics');
+      const snapshot = buildDiagnosticsSnapshot(backendResponse);
+      setDiagnosticsData(snapshot);
+      diagnosticsLog.info('diagnostics-loaded', { hasBackend: !!backendResponse });
+    } catch (err: any) {
+      console.error('Error loading diagnostics:', err);
+      setDiagnosticsError(
+        err?.response?.data?.detail || 'Failed to load diagnostics. Please try again.'
+      );
+      diagnosticsLog.error('diagnostics-load-failed', { message: err?.message });
+    } finally {
+      setDiagnosticsLoading(false);
+    }
+  };
+
+  const openDiagnostics = async () => {
+    setDiagnosticsOpen(true);
+    await loadDiagnostics();
+  };
+
+  const closeDiagnostics = () => {
+    setDiagnosticsOpen(false);
+  };
+
+  const handleCopyDiagnostics = async () => {
+    if (!diagnosticsData) return;
+    try {
+      const text = buildIssueText(diagnosticsData);
+      await navigator?.clipboard?.writeText(text);
+      setCopyStatus('Copied for GitHub');
+      diagnosticsLog.info('diagnostics-copied');
+      setTimeout(() => setCopyStatus(''), 2000);
+    } catch (err) {
+      console.error('Error copying diagnostics:', err);
+      setCopyStatus('Copy failed');
+    }
+  };
+
+  const handleDownloadDiagnostics = () => {
+    if (!diagnosticsData) return;
+    const blob = new Blob([JSON.stringify(diagnosticsData, null, 2)], {
+      type: 'application/json'
+    });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = 'braindrive-diagnostics.json';
+    anchor.click();
+    URL.revokeObjectURL(url);
+    diagnosticsLog.info('diagnostics-downloaded');
   };
 
   if (!user) {
@@ -379,9 +448,205 @@ const ProfilePage = () => {
                 </form>
               </Paper>
             </Grid>
+
+            {/* System Info Card */}
+            <Grid item xs={12}>
+              <Paper sx={{ p: 3 }}>
+                <Typography variant="h6" gutterBottom>
+                  System Info for GitHub Issues
+                </Typography>
+                <Divider sx={{ mb: 3 }} />
+
+                {diagnosticsError && (
+                  <Alert severity="error" sx={{ mb: 2 }}>
+                    {diagnosticsError}
+                  </Alert>
+                )}
+
+                <Stack direction="row" spacing={2}>
+                  <Button
+                    variant="contained"
+                    onClick={openDiagnostics}
+                    disabled={diagnosticsLoading}
+                  >
+                    {diagnosticsLoading ? 'Loading...' : 'Open System Info'}
+                  </Button>
+                  <Button variant="outlined" onClick={loadDiagnostics} disabled={diagnosticsLoading}>
+                    Refresh Data
+                  </Button>
+                </Stack>
+
+                <Typography variant="body2" color="text.secondary" sx={{ mt: 2 }}>
+                  Opens a drawer with collected environment details, plugins/modules, browser/OS info, and
+                  quick copy/download actions for GitHub issue reports.
+                </Typography>
+              </Paper>
+            </Grid>
           </Grid>
         </Grid>
       </Grid>
+
+      <Drawer anchor="right" open={diagnosticsOpen} onClose={closeDiagnostics}>
+        <Box
+          sx={{
+            width: { xs: 360, sm: 440 },
+            p: 3,
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 2,
+            bgcolor: theme.palette.mode === 'dark' ? theme.palette.background.default : theme.palette.background.paper
+          }}
+        >
+          <Typography variant="h6" gutterBottom>
+            BrainDrive System Info
+          </Typography>
+
+          {diagnosticsLoading && (
+            <Box sx={{ display: 'flex', justifyContent: 'center', py: 4 }}>
+              <CircularProgress />
+            </Box>
+          )}
+
+          {!diagnosticsLoading && diagnosticsError && (
+            <Alert severity="error">{diagnosticsError}</Alert>
+          )}
+
+          {!diagnosticsLoading && !diagnosticsError && diagnosticsData && (
+            <>
+              <Paper
+                variant="outlined"
+                sx={{
+                  p: 2,
+                  bgcolor: theme.palette.mode === 'dark' ? theme.palette.background.paper : undefined
+                }}
+              >
+                <Typography variant="subtitle1" gutterBottom>
+                  GitHub-ready Summary
+                </Typography>
+                <Box
+                  component="pre"
+                  sx={{
+                    bgcolor: theme.palette.mode === 'dark' ? theme.palette.grey[900] : theme.palette.grey[100],
+                    p: 1.5,
+                    borderRadius: 1,
+                    maxHeight: 240,
+                    overflow: 'auto',
+                    fontSize: 12
+                  }}
+                >
+                  {buildIssueText(diagnosticsData)}
+                </Box>
+              </Paper>
+
+              <Paper
+                variant="outlined"
+                sx={{
+                  p: 2,
+                  bgcolor: theme.palette.mode === 'dark' ? theme.palette.background.paper : undefined
+                }}
+              >
+                <Typography variant="subtitle1" gutterBottom>
+                  Backend Snapshot
+                </Typography>
+                <Box
+                  component="pre"
+                  sx={{
+                    bgcolor: theme.palette.mode === 'dark' ? theme.palette.grey[900] : theme.palette.grey[100],
+                    p: 1.5,
+                    borderRadius: 1,
+                    fontSize: 12,
+                    maxHeight: 160,
+                    overflow: 'auto'
+                  }}
+                >
+                  {JSON.stringify(diagnosticsData.backend, null, 2)}
+                </Box>
+              </Paper>
+
+              <Paper
+                variant="outlined"
+                sx={{
+                  p: 2,
+                  bgcolor: theme.palette.mode === 'dark' ? theme.palette.background.paper : undefined
+                }}
+              >
+                <Typography variant="subtitle1" gutterBottom>
+                  Frontend Snapshot
+                </Typography>
+                <Box
+                  component="pre"
+                  sx={{
+                    bgcolor: theme.palette.mode === 'dark' ? theme.palette.grey[900] : theme.palette.grey[100],
+                    p: 1.5,
+                    borderRadius: 1,
+                    fontSize: 12,
+                    maxHeight: 160,
+                    overflow: 'auto'
+                  }}
+                >
+                  {JSON.stringify(
+                    {
+                      client: diagnosticsData.client,
+                      frontend: diagnosticsData.frontend
+                    },
+                    null,
+                    2
+                  )}
+                </Box>
+              </Paper>
+
+              <Paper
+                variant="outlined"
+                sx={{
+                  p: 2,
+                  bgcolor: theme.palette.mode === 'dark' ? theme.palette.background.paper : undefined
+                }}
+              >
+                <Typography variant="subtitle1" gutterBottom>
+                  Recent Logs
+                </Typography>
+                <Box
+                  component="pre"
+                  sx={{
+                    bgcolor: theme.palette.mode === 'dark' ? theme.palette.grey[900] : theme.palette.grey[100],
+                    p: 1.5,
+                    borderRadius: 1,
+                    fontSize: 12,
+                    maxHeight: 160,
+                    overflow: 'auto'
+                  }}
+                >
+                  {diagnosticsData.logs.map((log, idx) => `${log.ts} [${log.level}] ${log.message}${log.context ? ` ${JSON.stringify(log.context)}` : ''}`).join('\n') || 'No logs captured'}
+                </Box>
+              </Paper>
+
+              <Stack direction="row" spacing={2}>
+                <Button variant="contained" onClick={handleCopyDiagnostics} disabled={!diagnosticsData}>
+                  Copy for GitHub
+                </Button>
+                <Button variant="outlined" onClick={handleDownloadDiagnostics} disabled={!diagnosticsData}>
+                  Download JSON
+                </Button>
+                <Button variant="text" onClick={loadDiagnostics} disabled={diagnosticsLoading}>
+                  Refresh
+                </Button>
+              </Stack>
+
+              {copyStatus && (
+                <Typography variant="body2" color="success.main">
+                  {copyStatus}
+                </Typography>
+              )}
+            </>
+          )}
+
+          {!diagnosticsLoading && !diagnosticsError && !diagnosticsData && (
+            <Typography variant="body2" color="text.secondary">
+              Click "Refresh" to collect diagnostics.
+            </Typography>
+          )}
+        </Box>
+      </Drawer>
     </Box>
   );
 };
