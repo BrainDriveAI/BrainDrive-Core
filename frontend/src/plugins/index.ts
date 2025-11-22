@@ -294,6 +294,10 @@ export const getAvailablePlugins = (): DynamicPluginConfig[] => {
   return Object.values(pluginConfigs);
 };
 
+export const getAllPluginConfigs = (): Record<string, DynamicPluginConfig> => {
+  return { ...pluginConfigs };
+};
+
 /**
  * Function to enable local plugins (for future use)
  * This can be called to re-enable local plugins if needed
