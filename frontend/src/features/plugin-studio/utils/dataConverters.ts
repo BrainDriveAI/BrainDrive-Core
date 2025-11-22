@@ -1,6 +1,52 @@
 import { PageData, ResponsiveLayouts, LayoutItem, ModuleConfig, PageMetadata } from '../../unified-dynamic-page-renderer/types';
 import { Page, Layouts, GridItem, LayoutItem as PluginStudioLayoutItem } from '../types';
 
+const sanitizeConfig = (config?: Record<string, any>): Record<string, any> => {
+  if (!config || typeof config !== 'object') {
+    return {};
+  }
+
+  const {
+    _originalItem,
+    _pluginStudioItem,
+    _originalModule,
+    _legacy,
+    ...rest
+  } = config as Record<string, any>;
+
+  return { ...rest };
+};
+
+const buildLayoutItemConfig = (
+  item: GridItem | PluginStudioLayoutItem,
+  moduleLookup: Record<string, any> = {}
+): ModuleConfig => {
+  const key = 'moduleUniqueId' in item ? item.moduleUniqueId : item.i;
+  const moduleEntry = moduleLookup[key];
+  const baseConfig = moduleEntry?.config || {};
+  // Prefer explicit overrides present on the layout item
+  const overrides =
+    ('configOverrides' in item ? item.configOverrides : undefined) ||
+    ('args' in item ? item.args : undefined) ||
+    (item as any).config ||
+    {};
+
+  const merged = {
+    ...baseConfig,
+    ...overrides
+  };
+
+  return {
+    ...merged,
+    moduleId: moduleEntry?.moduleId || merged.moduleId || key,
+    pluginId: moduleEntry?.pluginId || merged.pluginId,
+    // Keep references for round-tripping/conversion debugging
+    _originalItem: item,
+    _pluginStudioItem: item,
+    _originalModule: moduleEntry
+  } as ModuleConfig;
+};
+
 /**
  * Convert Plugin Studio data to Unified format
  * Simple, direct mapping - no complex conversion logic
@@ -9,25 +55,36 @@ export const convertPluginStudioToUnified = (
   page: Page,
   layouts: Layouts
 ): PageData => {
+  const moduleLookup = page.modules || {};
+
   return {
     id: page.id,
     name: page.name,
     route: page.route || `/plugin-studio/${page.id}`,
     layouts: {
-      desktop: layouts.desktop?.map(item => convertToLayoutItem(item)) || [],
-      tablet: layouts.tablet?.map(item => convertToLayoutItem(item)) || [],
-      mobile: layouts.mobile?.map(item => convertToLayoutItem(item)) || [],
-      wide: layouts.desktop?.map(item => convertToLayoutItem(item)) || [], // Fallback
-      ultrawide: layouts.desktop?.map(item => convertToLayoutItem(item)) || [] // Fallback
+      desktop: layouts.desktop?.map(item => convertToLayoutItem(item, moduleLookup)) || [],
+      tablet: layouts.tablet?.map(item => convertToLayoutItem(item, moduleLookup)) || [],
+      mobile: layouts.mobile?.map(item => convertToLayoutItem(item, moduleLookup)) || [],
+      wide: layouts.desktop?.map(item => convertToLayoutItem(item, moduleLookup)) || [], // Fallback
+      ultrawide: layouts.desktop?.map(item => convertToLayoutItem(item, moduleLookup)) || [] // Fallback
     },
-    modules: Object.entries(page.modules || {}).map(([id, module]) => ({
-      id,
-      pluginId: module.pluginId,
-      type: 'component',
-      ...module.config,
-      // Preserve original module data for reference
-      _originalModule: module
-    } as ModuleConfig)),
+    modules: Object.entries(moduleLookup).map(([id, module]) => {
+      const config = module?.config || {};
+      return {
+        id,
+        pluginId: module.pluginId,
+        moduleId: module.moduleId || config.moduleId || id,
+        moduleName: module.moduleName,
+        type: 'component',
+        ...config,
+        // Preserve original module data for reference
+        _originalModule: module,
+        _legacy: {
+          moduleName: module.moduleName,
+          originalConfig: { ...config }
+        }
+      } as ModuleConfig;
+    }),
     metadata: {
       title: page.name,
       description: page.description,
@@ -55,7 +112,10 @@ export const convertUnifiedToPluginStudio = (
  * Convert Plugin Studio item (GridItem or LayoutItem) to Unified LayoutItem
  * Simple, direct mapping without complex logic
  */
-const convertToLayoutItem = (item: GridItem | PluginStudioLayoutItem): LayoutItem => {
+const convertToLayoutItem = (
+  item: GridItem | PluginStudioLayoutItem,
+  moduleLookup: Record<string, any> = {}
+): LayoutItem => {
   // Handle GridItem
   if ('pluginId' in item) {
     const gridItem = item as GridItem;
@@ -69,11 +129,7 @@ const convertToLayoutItem = (item: GridItem | PluginStudioLayoutItem): LayoutIte
       minH: gridItem.minH,
       moduleId: gridItem.i,
       pluginId: gridItem.pluginId,
-      config: {
-        ...(gridItem.args || {}),
-        // Preserve original item for reference
-        _originalItem: gridItem
-      } as ModuleConfig,
+      config: buildLayoutItemConfig(gridItem, moduleLookup),
       isDraggable: true,
       isResizable: true,
       static: false
@@ -101,11 +157,7 @@ const convertToLayoutItem = (item: GridItem | PluginStudioLayoutItem): LayoutIte
     minH: layoutItem.minH,
     moduleId: layoutItem.moduleUniqueId,
     pluginId: pluginId,
-    config: {
-      ...(layoutItem.configOverrides || {}),
-      // Preserve original item for reference
-      _originalItem: layoutItem
-    } as ModuleConfig,
+    config: buildLayoutItemConfig(layoutItem, moduleLookup),
     isDraggable: true,
     isResizable: true,
     static: false
@@ -118,12 +170,13 @@ const convertToLayoutItem = (item: GridItem | PluginStudioLayoutItem): LayoutIte
  */
 const convertLayoutItemToGridItem = (item: LayoutItem): GridItem => {
   // Try to restore original item properties if available
-  const originalItem = item.config?._originalItem as GridItem;
+  const originalItem = item.config?._originalItem as GridItem | PluginStudioLayoutItem;
+  const sanitizedConfig = sanitizeConfig(item.config);
   
   if (originalItem) {
     // Preserve all original properties but update position/size
-    return {
-      ...originalItem,
+    const restored: GridItem = {
+      ...(originalItem as GridItem),
       x: item.x,
       y: item.y,
       w: item.w,
@@ -133,10 +186,16 @@ const convertLayoutItemToGridItem = (item: LayoutItem): GridItem => {
       maxW: item.maxW,
       maxH: item.maxH
     };
+
+    if ('configOverrides' in (originalItem as any)) {
+      (restored as any).configOverrides = sanitizedConfig;
+    }
+
+    return restored;
   }
   
   // Fallback - create from unified item
-  return {
+  const fallback: GridItem = {
     i: item.i,
     x: item.x,
     y: item.y,
@@ -147,13 +206,13 @@ const convertLayoutItemToGridItem = (item: LayoutItem): GridItem => {
     maxW: item.maxW,
     maxH: item.maxH,
     pluginId: item.pluginId,
-    args: item.config ? {
-      ...item.config,
-      // Remove internal properties
-      _originalItem: undefined,
-      _originalModule: undefined
-    } : {}
+    args: sanitizedConfig as Record<string, any>
   };
+
+  // Preserve config overrides for layout-aware consumers
+  (fallback as any).configOverrides = sanitizedConfig as Record<string, any>;
+
+  return fallback;
 };
 
 /**

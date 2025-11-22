@@ -551,10 +551,25 @@ export const useConfigDialogState = ({ open, selectedItem, currentPage }: UseCon
                       currentPage.route;
                       
         
-        await updatePage(pageId, newPage);
+        // Persist via updatePage with proper content envelope so backend stores modules/layouts
+        await updatePage(pageId, {
+          content: {
+            layouts: newPage.layouts,
+            modules: newPage.modules,
+            canvas: newPage.canvas
+          }
+        });
         
-        // Update the current page in the context
-        setCurrentPage(newPage);
+        // Update the current page in the context with the same shape we persisted
+        setCurrentPage({
+          ...newPage,
+          content: {
+            ...(newPage.content || {}),
+            layouts: newPage.layouts,
+            modules: newPage.modules,
+            canvas: newPage.canvas
+          }
+        });
         
         
         // Call the success callback if provided

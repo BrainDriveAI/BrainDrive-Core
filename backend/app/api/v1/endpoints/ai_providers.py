@@ -25,6 +25,7 @@ from app.schemas.ai_providers import (
     ChatCompletionRequest,
     ValidationRequest,
 )
+from app.utils.persona_utils import apply_persona_prompt_and_params
 
 # Flag to enable/disable test routes (set to False in production)
 TEST_ROUTES_ENABLED = os.getenv("ENABLE_TEST_ROUTES", "True").lower() == "true"
@@ -1007,73 +1008,40 @@ async def chat_completion(request: ChatCompletionRequest, db: AsyncSession = Dep
                         detail=f"Invalid persona model settings: {str(validation_error)}"
                     )
         
-        try:
-            # Get provider instance using the helper function
-            logger.info("Getting provider instance from request")
-            provider_instance = await get_provider_instance_from_request(request, db)
-            logger.info(f"Provider instance created successfully: {provider_instance.provider_name}")
-            
-            # Convert messages to the format expected by the provider
-            current_messages = [message.model_dump() for message in request.messages]
-            print(f"Current messages: {current_messages}")
-            
-            # Handle persona system prompt injection
-            messages_with_persona = current_messages.copy()
-            
-            # If persona is provided, inject system prompt at the beginning
-            if request.persona_system_prompt:
-                logger.info(f"Applying persona system prompt for persona_id: {request.persona_id}")
-                system_message = {
-                    "role": "system",
-                    "content": request.persona_system_prompt
-                }
-                # Insert system message at the beginning, but after any existing system messages
-                system_messages = [msg for msg in messages_with_persona if msg.get("role") == "system"]
-                non_system_messages = [msg for msg in messages_with_persona if msg.get("role") != "system"]
-                
-                # If there are existing system messages, replace the first one with persona system prompt
-                # Otherwise, add persona system prompt as the first message
-                if system_messages:
-                    messages_with_persona = [system_message] + system_messages[1:] + non_system_messages
-                else:
-                    messages_with_persona = [system_message] + non_system_messages
-                
-                logger.debug(f"Messages after persona system prompt injection: {len(messages_with_persona)} messages")
-            
-            # Apply persona model settings to params
-            enhanced_params = request.params.copy() if request.params else {}
-            if request.persona_model_settings:
-                logger.info(f"Applying persona model settings: {request.persona_model_settings}")
-                # Merge persona settings with request params (persona takes precedence)
-                enhanced_params.update(request.persona_model_settings)
-                logger.debug(f"Enhanced params with persona settings: {enhanced_params}")
-            
-            # Initialize combined_messages with persona-enhanced messages
-            combined_messages = messages_with_persona.copy()
-            
-            # Get or create a conversation
-            from app.models.conversation import Conversation
-            from app.models.message import Message
-            import uuid
-            
-            # Extract user_id from the request
-            user_id = request.user_id
-            # The conversation_id is defined in the ChatCompletionRequest schema, so we can access it directly
-            conversation_id = request.conversation_id
-            print(f"Conversation ID from request: {conversation_id}")
-            print(f"USER ID from request: {user_id} - THIS SHOULD BE THE CURRENT USER'S ID, NOT HARDCODED")
-            
-            # Debug: Print the entire request for inspection
-            print(f"Request details:")
-            print(f"  provider: {request.provider}")
-            print(f"  settings_id: {request.settings_id}")
-            print(f"  server_id: {request.server_id}")
-            print(f"  model: {request.model}")
-            print(f"  user_id: {user_id}")
-            print(f"  conversation_id: {conversation_id}")
-            print(f"  messages count: {len(request.messages)}")
-            for i, msg in enumerate(request.messages):
-                print(f"    Message {i+1}: role={msg.role}, content={msg.content[:50]}...")
+        # Get provider instance using the helper function
+        logger.info("Getting provider instance from request")
+        provider_instance = await get_provider_instance_from_request(request, db)
+        logger.info(f"Provider instance created successfully: {provider_instance.provider_name}")
+        
+        # Convert messages to the format expected by the provider
+        current_messages = [message.model_dump() for message in request.messages]
+        print(f"Current messages: {current_messages}")
+        
+        combined_messages = current_messages.copy()
+
+        # Get or create a conversation
+        from app.models.conversation import Conversation
+        from app.models.message import Message
+        import uuid
+        
+        # Extract user_id from the request
+        user_id = request.user_id
+        # The conversation_id is defined in the ChatCompletionRequest schema, so we can access it directly
+        conversation_id = request.conversation_id
+        print(f"Conversation ID from request: {conversation_id}")
+        print(f"USER ID from request: {user_id} - THIS SHOULD BE THE CURRENT USER'S ID, NOT HARDCODED")
+        
+        # Debug: Print the entire request for inspection
+        print(f"Request details:")
+        print(f"  provider: {request.provider}")
+        print(f"  settings_id: {request.settings_id}")
+        print(f"  server_id: {request.server_id}")
+        print(f"  model: {request.model}")
+        print(f"  user_id: {user_id}")
+        print(f"  conversation_id: {conversation_id}")
+        print(f"  messages count: {len(request.messages)}")
+        for i, msg in enumerate(request.messages):
+            print(f"    Message {i+1}: role={msg.role}, content={msg.content[:50]}...")
             
             # If conversation_id is provided, get the existing conversation
             if conversation_id:
@@ -1179,6 +1147,15 @@ async def chat_completion(request: ChatCompletionRequest, db: AsyncSession = Dep
                     await db.commit()
                     print(f"Added persona sample greeting: {request.persona_sample_greeting[:50]}...")
             
+            # Apply persona prompt/model settings after history merge (preserve new persona changes)
+            combined_messages, enhanced_params = apply_persona_prompt_and_params(
+                combined_messages,
+                request.params or {},
+                request.persona_system_prompt,
+                request.persona_model_settings,
+                max_history=100  # trim oldest history messages if needed
+            )
+
             # Store user messages in the database
             for msg in request.messages:
                 if msg.role == "user":
@@ -1382,25 +1359,6 @@ async def chat_completion(request: ChatCompletionRequest, db: AsyncSession = Dep
             result["conversation_id"] = conversation.id
             
             return result
-        except HTTPException as he:
-            # Preserve HTTP error codes/details from inner operations (e.g., missing API keys)
-            raise he
-        except Exception as inner_e:
-            logger.error(f"Inner exception in chat_completion: {inner_e}")
-            import traceback
-            logger.error(traceback.format_exc())
-            
-            # Provide a more detailed error message with persona context
-            error_message = str(inner_e)
-            if "provider_instance" in locals():
-                error_message += f" Provider: {request.provider}, Server: {request.server_id}"
-            if request.persona_id:
-                error_message += f" Persona: {request.persona_id}"
-            
-            raise HTTPException(
-                status_code=500,
-                detail=f"Error in chat completion: {error_message}. Please check your configuration and try again."
-            )
     except HTTPException:
         # Re-raise HTTP exceptions with their original status codes and details
         raise
