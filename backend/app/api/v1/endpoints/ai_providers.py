@@ -1092,8 +1092,14 @@ async def chat_completion(request: ChatCompletionRequest, db: AsyncSession = Dep
                         if skip_last and i == len(previous_messages) - 1:
                             print(f"  Skipping last message (index {i})")
                             continue
-                            
-                        role = "assistant" if msg.sender == "llm" else "user"
+                        
+                        # Prefer explicit role stored in metadata, fall back to sender
+                        role = None
+                        if msg.message_metadata and isinstance(msg.message_metadata, dict):
+                            role = msg.message_metadata.get("role")
+                        if role not in {"assistant", "user", "system"}:
+                            role = "assistant" if msg.sender == "llm" else "user"
+                        
                         history_messages.append({
                             "role": role,
                             "content": msg.message
@@ -1147,6 +1153,8 @@ async def chat_completion(request: ChatCompletionRequest, db: AsyncSession = Dep
                     await db.commit()
                     print(f"Added persona sample greeting: {request.persona_sample_greeting[:50]}...")
             
+            document_context_mode = request.params.get("document_context_mode")
+
             # Apply persona prompt/model settings after history merge (preserve new persona changes)
             combined_messages, enhanced_params = apply_persona_prompt_and_params(
                 combined_messages,
@@ -1156,18 +1164,27 @@ async def chat_completion(request: ChatCompletionRequest, db: AsyncSession = Dep
                 max_history=100  # trim oldest history messages if needed
             )
 
-            # Store user messages in the database
+            # Remove local-only params before sending to provider
+            if "document_context_mode" in enhanced_params:
+                enhanced_params.pop("document_context_mode", None)
+
+            # Store incoming messages (user/system) in the database
             for msg in request.messages:
-                if msg.role == "user":
+                if msg.role == "system" and document_context_mode == "one-shot":
+                    print("Skipping persistence of one-shot document context system message.")
+                    continue
+
+                if msg.role in {"user", "system"}:
+                    sender = "user" if msg.role == "user" else "system"
                     db_message = Message(
                         id=str(uuid.uuid4()),
                         conversation_id=conversation.id,
-                        sender="user",
+                        sender=sender,
                         message=msg.content,
                         message_metadata={"role": msg.role}
                     )
                     db.add(db_message)
-                    print(f"Added user message to database: {msg.content[:50]}...")
+                    print(f"Added {msg.role} message to database: {msg.content[:50]}...")
             
             # Handle streaming
             if request.stream:

@@ -16,12 +16,16 @@ def apply_persona_prompt_and_params(
     if persona_model_settings:
         params.update(persona_model_settings)
 
-    # Remove existing system messages; we'll re-insert persona system prompt if provided
+    # Preserve existing system messages (e.g., document context) and prepend persona system prompt if provided
+    system_messages = [m for m in messages if m.get("role") == "system"]
     non_system_messages = [m for m in messages if m.get("role") != "system"]
     updated_messages: List[Dict[str, Any]] = []
 
     if persona_system_prompt:
         updated_messages.append({"role": "system", "content": persona_system_prompt})
+
+    # Keep prior system messages after persona prompt to preserve context
+    updated_messages.extend(system_messages)
 
     # Apply optional trimming on history (non-system only)
     if max_history is not None and max_history > 0 and len(non_system_messages) > max_history:
