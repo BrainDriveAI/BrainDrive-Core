@@ -11,6 +11,7 @@ declare global {
 const envSchema = z.object({
 	VITE_API_URL: z.string().optional(),
 	VITE_API_TIMEOUT: z.string().transform(Number).optional(),
+	VITE_PLUGIN_INSTALL_TIMEOUT: z.string().transform(Number).optional(),
 	VITE_USE_PROXY: z
 		.string()
 		.transform((val) => val !== "false")
@@ -62,7 +63,8 @@ const getApiBaseUrl = () => {
 export const config = {
 	api: {
 		baseURL: getApiBaseUrl(),
-		timeout: env.VITE_API_TIMEOUT || 10000,
+		timeout: env.VITE_API_TIMEOUT || 30000,
+		pluginInstallTimeout: env.VITE_PLUGIN_INSTALL_TIMEOUT || 120000,
 	},
 	auth: {
 		tokenKey: "accessToken",

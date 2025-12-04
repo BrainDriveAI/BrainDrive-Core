@@ -17,6 +17,7 @@ import {
   Stack,
   CircularProgress
 } from '@mui/material';
+import { alpha } from '@mui/material/styles';
 import {
   ArrowBack as ArrowBackIcon,
   Extension as ExtensionIcon,
@@ -317,6 +318,26 @@ const PluginInstallerPage: React.FC = () => {
                 <Chip size="small" label={statusChip.label} color={statusChip.color} variant="outlined" />
                 <Chip size="small" label={`Progress ${progressValue}%`} variant="outlined" />
               </Stack>
+            </Paper>
+
+            <Paper
+              elevation={0}
+              sx={{
+                p: 3,
+                border: '1px solid',
+                borderColor: 'warning.light',
+                bgcolor: theme => alpha(theme.palette.warning.main, theme.palette.mode === 'dark' ? 0.14 : 0.08)
+              }}
+            >
+              <Typography variant="subtitle2" gutterBottom color="warning.main">
+                Security Notice
+              </Typography>
+              <Typography variant="body2" sx={{ color: 'text.primary', mb: 0.5 }}>
+                Only install plugins from trusted sources. Malicious plugins can potentially harm your system or compromise your data.
+              </Typography>
+              <Typography variant="body2" color="text.secondary">
+                Always verify the source and contents of plugin files before installation.
+              </Typography>
             </Paper>
 
             <Paper elevation={0} sx={{ p: 3, border: '1px solid', borderColor: 'divider' }}>

@@ -10,6 +10,13 @@ import {
 } from '../types';
 import { pluginInstallerService } from '../services';
 
+declare global {
+  interface Window {
+    refreshSidebar?: () => void;
+    refreshPages?: () => void;
+  }
+}
+
 const GITHUB_INSTALLATION_STEPS: Omit<InstallationStep, 'status'>[] = [
   { id: 'validate', label: 'Validating repository URL' },
   { id: 'download', label: 'Downloading plugin from repository' },
@@ -70,6 +77,14 @@ export const usePluginInstaller = () => {
         isInstalling: false,
         result
       }));
+
+      // Trigger a sidebar/page refresh so new plugin routes appear immediately
+      try {
+        window.refreshSidebar?.();
+        window.refreshPages?.();
+      } catch (err) {
+        console.warn('Failed to refresh navigation after plugin install', err);
+      }
     } else {
       // Determine which step failed based on the error details
       let failedStep = 3; // Default to install step
@@ -224,7 +239,17 @@ export const usePluginInstaller = () => {
   }, []);
 
   const uninstallPlugin = useCallback(async (pluginSlug: string) => {
-    return await pluginInstallerService.uninstallPlugin(pluginSlug);
+    const result = await pluginInstallerService.uninstallPlugin(pluginSlug);
+
+    // Refresh navigation so sidebar/pages reflect removal
+    try {
+      window.refreshSidebar?.();
+      window.refreshPages?.();
+    } catch (err) {
+      console.warn('Failed to refresh navigation after plugin uninstall', err);
+    }
+
+    return result;
   }, []);
 
   const getAvailableUpdates = useCallback(async () => {

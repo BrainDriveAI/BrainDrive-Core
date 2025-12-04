@@ -13,6 +13,8 @@ import {
 } from '../types';
 import { remotePluginService } from '../../../services/remotePluginService';
 import { registerRemotePlugins } from '../../../plugins';
+import { config } from '../../../config';
+import { pluginLoader } from '../../unified-dynamic-page-renderer/services/PluginLoader';
 
 class PluginInstallerService {
   private api = ApiService.getInstance();
@@ -48,13 +50,14 @@ class PluginInstallerService {
         {
           headers: {
             'Content-Type': 'multipart/form-data'
-          }
+          },
+          timeout: config.api.pluginInstallTimeout || config.api.timeout
         }
       );
 
       // If installation was successful, refresh the plugin registry
       if (response.status === 'success') {
-        await this.refreshPluginRegistry();
+        await this.refreshPluginRegistry(response.data?.plugin_slug || response.data?.plugin_id);
       }
 
       return response;
@@ -124,13 +127,14 @@ class PluginInstallerService {
         {
           headers: {
             'Content-Type': 'multipart/form-data'
-          }
+          },
+          timeout: config.api.pluginInstallTimeout || config.api.timeout
         }
       );
 
       // If installation was successful, refresh the plugin registry
       if (response.status === 'success') {
-        await this.refreshPluginRegistry();
+        await this.refreshPluginRegistry(response.data?.plugin_slug || response.data?.plugin_id);
       }
 
       return response;
@@ -243,25 +247,49 @@ class PluginInstallerService {
   /**
    * Refresh the frontend plugin registry after installation
    */
-  private async refreshPluginRegistry(): Promise<void> {
+  private async refreshPluginRegistry(expectedPluginId?: string): Promise<void> {
     try {
       console.log('Refreshing plugin registry after installation...');
 
-      // Get the updated manifest from the backend
-      const manifest = await remotePluginService.getRemotePluginManifest();
+      const maxAttempts = expectedPluginId ? 4 : 1;
+      for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        // Get the updated manifest from the backend
+        const manifest = await remotePluginService.getRemotePluginManifest();
 
-      // Load all plugins in parallel
-      const loadedPlugins = await Promise.all(
-        manifest.map(plugin => remotePluginService.loadRemotePlugin(plugin))
-      );
+        // Load all plugins in parallel
+        const loadedPlugins = await Promise.all(
+          manifest.map(plugin => remotePluginService.loadRemotePlugin(plugin))
+        );
 
-      // Filter out any failed loads (null results)
-      const successfullyLoaded = loadedPlugins.filter(p => p !== null);
+        // Filter out any failed loads (null results)
+        const successfullyLoaded = loadedPlugins.filter(p => p !== null);
 
-      // Register the plugins in the frontend registry
-      registerRemotePlugins(successfullyLoaded);
+        // Register the plugins in the frontend registry
+        registerRemotePlugins(successfullyLoaded);
 
-      console.log(`Plugin registry refreshed with ${successfullyLoaded.length} plugins`);
+        // Clear plugin loader cache so newly installed plugins can be resolved immediately
+        pluginLoader.clearCache(expectedPluginId);
+
+        // Break early if we found the expected plugin in the manifest
+        if (
+          !expectedPluginId ||
+          manifest.some(p => {
+            const candidates = [
+              (p as any).id,
+              (p as any).plugin_slug,
+              (p as any).slug,
+              (p as any).name
+            ].filter(Boolean);
+            return candidates.includes(expectedPluginId);
+          })
+        ) {
+          console.log(`Plugin registry refreshed with ${successfullyLoaded.length} plugins`);
+          break;
+        }
+
+        // Give the backend a moment to publish the new manifest before retrying
+        await new Promise(resolve => setTimeout(resolve, 1200));
+      }
     } catch (error) {
       console.error('Failed to refresh plugin registry:', error);
       // Don't throw error as this shouldn't fail the installation

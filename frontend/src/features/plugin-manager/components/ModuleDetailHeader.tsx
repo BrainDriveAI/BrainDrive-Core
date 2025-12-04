@@ -78,6 +78,13 @@ export const ModuleDetailHeader: React.FC<ModuleDetailHeaderProps> = ({
     setError(null);
     try {
       await onDelete();
+      // Refresh sidebar navigation in case plugin removal changes available pages
+      const win = window as typeof window & {
+        refreshSidebar?: () => void;
+        refreshPages?: () => void;
+      };
+      win.refreshSidebar?.();
+      win.refreshPages?.();
       setDeleteDialogOpen(false);
       onBack(); // Navigate back after successful deletion
     } catch (err) {

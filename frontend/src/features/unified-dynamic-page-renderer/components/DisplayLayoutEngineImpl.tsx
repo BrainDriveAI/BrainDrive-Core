@@ -1277,7 +1277,19 @@ export const DisplayLayoutEngineImpl: React.FC<DisplayLayoutEngineProps> = React
         if (!extractedModuleId && item.moduleId && item.moduleId.includes('_')) {
           const parts = item.moduleId.split('_');
           const isTimestamp = (s: string) => /^\d{12,}$/.test(s);
-          extractedModuleId = parts.reverse().find(p => p && !isTimestamp(p) && p !== fallbackPluginId);
+          const isUserId = (s: string) => /^[0-9a-f]{24,}$/i.test(s);
+          const candidates = parts
+            .slice()
+            .reverse()
+            .filter(p => p && !isTimestamp(p));
+          
+          // Prefer a non-user-id token that is not the pluginId; fall back to any non-user-id token,
+          // then any remaining token before finally using the raw moduleId.
+          extractedModuleId =
+            candidates.find(p => p !== fallbackPluginId && !isUserId(p)) ||
+            candidates.find(p => !isUserId(p)) ||
+            candidates.find(p => p !== fallbackPluginId) ||
+            candidates[0];
         }
         
         // Otherwise use item.moduleId as-is

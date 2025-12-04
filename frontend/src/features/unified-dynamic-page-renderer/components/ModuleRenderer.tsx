@@ -233,6 +233,12 @@ const UnifiedModuleRenderer: React.FC<UnifiedModuleRendererProps> = ({
           if (!foundModule) {
             const target = normalize(moduleId);
             foundModule = remotePlugin.loadedModules.find(m => normalize(m.id) === target || normalize(m.name) === target);
+            // If still not found, allow suffix/substring match so "WhyDetector" can match "BrainDriveWhyDetector"
+            if (!foundModule && target) {
+              foundModule = remotePlugin.loadedModules.find(m =>
+                normalize(m.id).includes(target) || normalize(m.name).includes(target)
+              );
+            }
           }
         }
         
