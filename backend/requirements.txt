@@ -112,3 +112,13 @@ groq==0.31.0
 beautifulsoup4==4.12.2
 PyPDF2
 pandas
+filetype==1.2.0
+pdfplumber==0.11.4
+python-docx==1.1.2
+python-pptx==0.6.23
+html2text==2024.2.26
+ebooklib==0.18
+odfpy==1.4.1
+striprtf==0.0.26
+markdown==3.7
+lxml==5.3.0
