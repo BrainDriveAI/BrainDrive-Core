@@ -131,16 +131,6 @@ const LocalFileInstallForm: React.FC<LocalFileInstallFormProps> = ({
           </Typography>
         </Alert>
 
-        <Alert severity="warning">
-          <Typography variant="body2" sx={{ fontWeight: 'medium', mb: 1 }}>
-            Security Notice:
-          </Typography>
-          <Typography variant="body2">
-            Only install plugins from trusted sources. Malicious plugins can potentially harm your system or compromise your data. 
-            Always verify the source and contents of plugin files before installation.
-          </Typography>
-        </Alert>
-
         <Box sx={{ display: 'flex', gap: 2, justifyContent: 'flex-end' }}>
           <Button
             type="submit"
