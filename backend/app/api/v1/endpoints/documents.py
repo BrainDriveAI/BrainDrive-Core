@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from fastapi.responses import JSONResponse
+from starlette.concurrency import run_in_threadpool
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
@@ -74,7 +75,14 @@ async def process_document(
     )
 
     try:
-        content = await document_processor.process_upload(file, options)
+        data = await file.read()
+        content = await run_in_threadpool(
+            document_processor.process_bytes,
+            data,
+            file.filename,
+            file.content_type,
+            options,
+        )
         logger.info("Successfully processed document: %s (%s)", file.filename, content.file_type)
         return JSONResponse(content=_serialize_content(file.filename, file.content_type, content))
     except SizeExceeded as exc:
@@ -116,7 +124,14 @@ async def process_multiple_documents(
     results = []
     for file in files:
         try:
-            content = await document_processor.process_upload(file, options)
+            data = await file.read()
+            content = await run_in_threadpool(
+                document_processor.process_bytes,
+                data,
+                file.filename,
+                file.content_type,
+                options,
+            )
             results.append(_serialize_content(file.filename, file.content_type, content))
         except SizeExceeded as exc:
             results.append({
