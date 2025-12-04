@@ -35,6 +35,13 @@ BrainDrive Backend is the engine behind the BrainDrive application—a modular, 
 
 ---
 
+## 📄 Document Processing
+
+- Layout-aware extraction for PDF, DOCX/RTF, PPTX, spreadsheets (XLSX/XLS/ODS), CSV, JSON, Markdown/HTML/XML/text, EML, and EPUB.
+- Registry-driven detection (magic, MIME, extension) powers `/api/v1/documents/supported-types` and keeps upload validation in sync.
+- Runtime guards: 10MB upload ceiling, configurable character caps, and chunking defaults tuned for chat context (25 segments, 2k chars, 200 overlap).
+- Optional query flags on `/process` and `/process-multiple`: `include_chunks`, `max_chars`, `preserve_layout` (PDF), and `strip_boilerplate` (HTML/EML).
+
 ## 📦 Installation
 
 - [Installation Guide](../INSTALL.md) - Complete instructions how to setup your BrainDrive
