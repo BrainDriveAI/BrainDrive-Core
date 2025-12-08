@@ -55,6 +55,18 @@ class SettingsInitializer(UserInitializerBase):
             "tags": '["auto_generated", "ui"]'
         },
         {
+            "id": "white_label_settings",
+            "name": "White Label",
+            "description": "Labels and links for product/brand surfaces",
+            "category": "branding",
+            "type": "object",
+            "default_value": '{"PRIMARY":{"label":"BrainDrive","url":"https://tinyurl.com/4dx47m7p"},"OWNERS_MANUAL":{"label":"BrainDrive Owner\'s Manual","url":"https://tinyurl.com/vd99cuex"},"COMMUNITY":{"label":"BrainDrive Community","url":"https://tinyurl.com/yc2u5v2a"},"SUPPORT":{"label":"BrainDrive Support","url":"https://tinyurl.com/4h4rtx2m"},"DOCUMENTATION":{"label":"BrainDrive Docs","url":"https://tinyurl.com/ewajc7k3"}}',
+            "allowed_scopes": '["system", "user"]',
+            "validation": None,
+            "is_multiple": False,
+            "tags": '["auto_generated", "ui", "branding"]'
+        },
+        {
             "id": "branding_logo_settings",
             "name": "Branding Logo Settings",
             "description": "Light/dark logo URLs and alt text",
@@ -117,6 +129,13 @@ class SettingsInitializer(UserInitializerBase):
             "definition_id": "powered_by_settings",
             "name": "Powered By",
             "value": '{"text": "Powered by BrainDrive", "link": "https://community.braindrive.ai"}',
+            "scope": "user",
+            "page_id": None
+        },
+        {
+            "definition_id": "white_label_settings",
+            "name": "White Label",
+            "value": '{"PRIMARY":{"label":"BrainDrive","url":"https://tinyurl.com/4dx47m7p"},"OWNERS_MANUAL":{"label":"BrainDrive Owner\'s Manual","url":"https://tinyurl.com/vd99cuex"},"COMMUNITY":{"label":"BrainDrive Community","url":"https://tinyurl.com/yc2u5v2a"},"SUPPORT":{"label":"BrainDrive Support","url":"https://tinyurl.com/4h4rtx2m"},"DOCUMENTATION":{"label":"BrainDrive Docs","url":"https://tinyurl.com/ewajc7k3"}}',
             "scope": "user",
             "page_id": None
         },
