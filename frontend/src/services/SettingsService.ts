@@ -42,6 +42,7 @@ export class SettingsService extends AbstractBaseService {
   private subscribers: Map<string, Set<SettingsSubscriber>> = new Map();
   private categorySubscribers: Map<string, Set<SettingsSubscriber>> = new Map();
   private serviceRegistry: any;
+  private definitionsLoadedFromBackend = false;
 
   constructor(serviceRegistry?: any) {
     const capabilities: ServiceCapability[] = [
@@ -96,6 +97,9 @@ export class SettingsService extends AbstractBaseService {
   async getSetting<T>(definitionId: string, context: { userId?: string; pageId?: string } = {}): Promise<T | undefined> {
     // console.log(`SettingsService: Getting setting ${definitionId} with context:`, context);
     try {
+      // Ensure we have the definition loaded before attempting anything
+      await this.ensureDefinitionLoaded(definitionId);
+
       // First try to get from backend
       // console.log(`SettingsService: Attempting to load ${definitionId} from backend`);
       const backendValue = await this.loadFromBackend(definitionId, context);
@@ -131,6 +135,7 @@ export class SettingsService extends AbstractBaseService {
   async setSetting<T>(definitionId: string, value: T, context: { userId?: string; pageId?: string } = {}): Promise<void> {
     // console.log(`SettingsService: Setting ${definitionId} with value:`, value, 'and context:', context);
     
+    await this.ensureDefinitionLoaded(definitionId);
     const definition = this.definitions.get(definitionId);
     if (!definition) {
       console.error(`SettingsService: Setting definition ${definitionId} not found`);
@@ -234,6 +239,7 @@ export class SettingsService extends AbstractBaseService {
 
   // Multiple settings instances
   async createSettingInstance(definitionId: string, value: any, context: { userId?: string; pageId?: string }, name?: string): Promise<SettingInstance> {
+    await this.ensureDefinitionLoaded(definitionId);
     const definition = this.definitions.get(definitionId);
     if (!definition) {
       throw new Error(`Setting definition ${definitionId} not found`);
@@ -291,6 +297,7 @@ export class SettingsService extends AbstractBaseService {
   }
 
   async getSettingInstance(definitionId: string, context: { userId?: string; pageId?: string }): Promise<SettingInstance | undefined> {
+    await this.ensureDefinitionLoaded(definitionId);
     const definition = this.definitions.get(definitionId);
     if (!definition) {
       throw new Error(`Setting definition ${definitionId} not found`);
@@ -335,6 +342,7 @@ export class SettingsService extends AbstractBaseService {
       throw new Error(`Setting instance ${instanceId} not found`);
     }
 
+    await this.ensureDefinitionLoaded(instance.definitionId);
     const definition = this.definitions.get(instance.definitionId);
     if (!definition) {
       throw new Error(`Setting definition ${instance.definitionId} not found`);
@@ -370,6 +378,7 @@ export class SettingsService extends AbstractBaseService {
     this.instances.delete(instanceId);
     this.notifySubscribers(instanceId, undefined);
 
+    await this.ensureDefinitionLoaded(instance.definitionId);
     const definition = this.definitions.get(instance.definitionId);
     if (definition) {
       this.notifyCategorySubscribers(definition.category);
@@ -739,6 +748,42 @@ export class SettingsService extends AbstractBaseService {
     } catch (error) {
       console.error('Error loading settings from backend:', error);
       return null;
+    }
+  }
+
+  /**
+   * Load all definitions from backend if not already loaded, or when a specific definition is missing.
+   */
+  private async ensureDefinitionLoaded(definitionId: string): Promise<void> {
+    if (this.definitions.has(definitionId) && this.definitionsLoadedFromBackend) {
+      return;
+    }
+
+    // Try to fetch definitions from backend
+    try {
+      const apiService = ApiService.getInstance();
+      const defs = await apiService.get<any[]>('/api/v1/settings/definitions');
+      if (Array.isArray(defs)) {
+        defs.forEach(def => {
+          if (!def?.id) return;
+          const mapped: SettingDefinition = {
+            id: def.id,
+            name: def.name || def.id,
+            description: def.description || '',
+            category: def.category || 'general',
+            type: def.type || 'object',
+            allowedScopes: Array.isArray(def.allowed_scopes) ? def.allowed_scopes : def.allowedScopes || ['system', 'user', 'page', 'user_page'],
+            isMultiple: def.is_multiple ?? def.isMultiple ?? false,
+            tags: def.tags || [],
+          };
+          this.definitions.set(mapped.id, mapped);
+        });
+        this.definitionsLoadedFromBackend = true;
+        this.saveToStorage();
+      }
+    } catch (error) {
+      // Silent failure; callers will still error if definition not present
+      console.warn('SettingsService: unable to load definitions from backend', error);
     }
   }
 }

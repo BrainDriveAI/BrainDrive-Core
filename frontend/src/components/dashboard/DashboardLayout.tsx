@@ -15,7 +15,12 @@ const DashboardLayout = () => {
   const settingsService = useSettings();
   const location = useLocation();
   const defaultCopyright = { text: 'AIs can make mistakes. Check important info.' };
+  const defaultWhiteLabel = {
+    COMMUNITY: { label: 'BrainDrive Community', url: 'https://tinyurl.com/yc2u5v2a' },
+    DOCUMENTATION: { label: 'BrainDrive Docs', url: 'https://tinyurl.com/ewajc7k3' },
+  };
   const [copyright, setCopyright] = useState(defaultCopyright);
+  const [whiteLabel, setWhiteLabel] = useState(defaultWhiteLabel);
 
   // Update sidebar state when screen size changes
   useEffect(() => {
@@ -48,6 +53,42 @@ const DashboardLayout = () => {
         }
       } catch {
         // Keep default on error
+      }
+    })();
+    return () => {
+      active = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Load white-label settings for footer links
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      try {
+        const value = await settingsService.getSetting<any>('white_label_settings');
+        if (!active) return;
+
+        const parsed =
+          typeof value === 'string'
+            ? (() => {
+                try {
+                  return JSON.parse(value);
+                } catch {
+                  return undefined;
+                }
+              })()
+            : value;
+
+        if (parsed && typeof parsed === 'object') {
+          const next = {
+            COMMUNITY: parsed.COMMUNITY ?? defaultWhiteLabel.COMMUNITY,
+            DOCUMENTATION: parsed.DOCUMENTATION ?? defaultWhiteLabel.DOCUMENTATION,
+          };
+          setWhiteLabel(next);
+        }
+      } catch {
+        // Keep defaults on error
       }
     })();
     return () => {
@@ -112,12 +153,52 @@ const DashboardLayout = () => {
             borderTop: `1px solid ${theme.palette.divider}`,
             color: 'text.secondary',
             typography: 'caption',
-            textAlign: 'center',
             pt: 1,
             mt: 1,
+            px: 1,
           }}
         >
-          {copyright.text}
+          <Box
+            sx={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              flexWrap: 'wrap',
+              gap: 1.5,
+            }}
+          >
+            <Box sx={{ textAlign: 'center' }}>{copyright.text}</Box>
+            <Box component="span" sx={{ color: 'inherit' }} aria-hidden="true">
+              •
+            </Box>
+            <Box
+              sx={{
+                display: 'flex',
+                gap: 1.5,
+                alignItems: 'center',
+              }}
+            >
+              <a
+                href={whiteLabel.COMMUNITY.url}
+                target="_blank"
+                rel="noreferrer"
+                style={{ color: 'inherit', textDecoration: 'none' }}
+              >
+                {whiteLabel.COMMUNITY.label}
+              </a>
+              <Box component="span" sx={{ color: 'inherit' }} aria-hidden="true">
+                •
+              </Box>
+              <a
+                href={whiteLabel.DOCUMENTATION.url}
+                target="_blank"
+                rel="noreferrer"
+                style={{ color: 'inherit', textDecoration: 'none' }}
+              >
+                {whiteLabel.DOCUMENTATION.label}
+              </a>
+            </Box>
+          </Box>
         </Box>
       </Box>
     </Box>
