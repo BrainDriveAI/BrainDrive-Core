@@ -280,11 +280,17 @@ async def get_setting_definitions(
         result = await db.execute(text(query), params)
         rows = result.fetchall()
         
+        def _safe_json(value, default=None):
+            try:
+                return json.loads(value) if value not in (None, "") else default
+            except (json.JSONDecodeError, TypeError):
+                return default
+
         # Convert rows to dictionaries
         definitions = []
         for row in rows:
             # Parse JSON fields
-            allowed_scopes = json.loads(row[6]) if row[6] else []
+            allowed_scopes = _safe_json(row[6], [])
             # Convert allowed_scopes from strings to SettingScope enum values
             allowed_scopes_enum = [SettingScope(scope) for scope in allowed_scopes]
             
@@ -294,11 +300,11 @@ async def get_setting_definitions(
                 "description": row[2],
                 "category": row[3],
                 "type": row[4],
-                "default_value": json.loads(row[5]) if row[5] else None,
+                "default_value": _safe_json(row[5], None),
                 "allowed_scopes": allowed_scopes_enum,
-                "validation": json.loads(row[7]) if row[7] else None,
+                "validation": _safe_json(row[7], None),
                 "is_multiple": row[8],
-                "tags": json.loads(row[9]) if row[9] else [],
+                "tags": _safe_json(row[9], []),
                 "created_at": row[10],
                 "updated_at": row[11]
             }

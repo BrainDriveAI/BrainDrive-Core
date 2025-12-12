@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import contextlib
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -149,10 +150,12 @@ class JobManager:
         try:
             yield session
         finally:
-            try:
-                await asyncio.shield(session.close())
-            except Exception:
-                logger.exception("Failed to close async session cleanly")
+            # Swallow cancellation during shutdown/reload while closing sessions
+            with contextlib.suppress(asyncio.CancelledError):
+                try:
+                    await asyncio.shield(session.close())
+                except Exception:
+                    logger.exception("Failed to close async session cleanly")
 
     async def start(self) -> None:
         """Start the background worker loop."""

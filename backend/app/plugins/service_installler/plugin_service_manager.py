@@ -4,8 +4,9 @@ import tarfile
 import tempfile
 import aiohttp
 import asyncio
+import subprocess
 from pathlib import Path
-from typing import List, Dict, Union
+from typing import List, Dict, Union, Optional
 import structlog
 import shutil
 import traceback
@@ -22,8 +23,33 @@ from .prerequisites import check_required_env_vars, convert_to_download_url
 
 from app.plugins.repository import PluginRepository
 from app.core.database import get_db
+from app.plugins.service_installler.service_health_checker import wait_for_service_health
 
 logger = structlog.get_logger()
+
+RUNTIME_BASE = Path("/home/hacker/hank/BrainDrive-Core/backend/services_runtime")
+
+# Static mapping for venv-managed services (local clones under services_runtime)
+VENV_SERVICE_MAP = {
+    "document_chat": {
+        "repo": RUNTIME_BASE / "Document-Chat-Service",
+        "repo_url": "https://github.com/DJJones66/Document-Chat-Service",
+        "install_cmd": ["python3.11", "service_scripts/install_with_venv.py"],
+        "start_cmd": ["python3.11", "service_scripts/start_with_venv.py"],
+        "stop_cmd": ["python3.11", "service_scripts/shutdown_with_venv.py"],
+        "restart_cmd": ["python3.11", "service_scripts/restart_with_venv.py"],
+        "health": "http://localhost:18000/health",
+    },
+    "document_processing": {
+        "repo": RUNTIME_BASE / "Document-Processing-Service",
+        "repo_url": "https://github.com/DJJones66/Document-Processing-Service",
+        "install_cmd": ["python3.11", "service_scripts/install_with_venv.py"],
+        "start_cmd": ["python3.11", "service_scripts/start_with_venv.py"],
+        "stop_cmd": ["python3.11", "service_scripts/shutdown_with_venv.py"],
+        "restart_cmd": ["python3.11", "service_scripts/restart_with_venv.py"],
+        "health": "http://localhost:18080/health",
+    },
+}
 
 def ensure_service_dto(
     service_data: Union[Dict, PluginServiceRuntimeDTO], 
@@ -105,6 +131,8 @@ async def install_and_run_required_services(
                 # Dispatch to the appropriate installer based on service type
                 if service_type == 'python':
                     await install_python_service(service, target_dir)
+                elif service_type == 'venv_process':
+                    await _start_venv_service(service_dto)
                 elif service_type == 'docker-compose':
                     await build_and_start_docker_service(service_dto, target_dir, env_vars, required_vars)
                 else:
@@ -277,6 +305,8 @@ async def start_plugin_services(services_runtime: List[PluginServiceRuntimeDTO],
             elif service_type == 'python':
                 # Assuming install_python_service can handle a pre-existing venv
                 await install_python_service(service_data, target_dir)
+            elif service_type == 'venv_process':
+                await _start_venv_service(service_data)
             else:
                 logger.warning("Skipping unknown service type", type=service_type, name=service_data.name)
                 
@@ -303,6 +333,8 @@ async def stop_plugin_services(services_runtime: List[PluginServiceRuntimeDTO], 
                     service_data,
                     target_dir,
                 )
+            elif service_type == 'venv_process':
+                await _stop_venv_service(service_data)
             else:
                 logger.warning("Skipping unknown service type", type=service_type, name=service_data.name)
                 
@@ -360,8 +392,138 @@ async def restart_plugin_services(plugin_slug: str, definition_id: str, user_id:
                     # implement restart logic for python service
                     # (stop old process if tracked, then install/start again)
                     await install_python_service(service_runtime, target_dir)
+                elif service_type == "venv_process":
+                    await _restart_venv_service(service_runtime)
                 results[service_runtime.name] = "restarted"
             except Exception as e:
                 results[service_runtime.name] = f"failed: {str(e)}"
 
         return results
+
+
+def _resolve_venv_meta(service_name: str) -> Optional[Dict]:
+    key = service_name
+    if key in VENV_SERVICE_MAP:
+        return VENV_SERVICE_MAP[key]
+    # common alternate names
+    alt = service_name.replace("_service", "")
+    return VENV_SERVICE_MAP.get(alt)
+
+
+def _truncate_output(text: str, limit: int = 1200) -> str:
+    if len(text) <= limit:
+        return text
+    return text[:limit] + f"\n... [truncated {len(text) - limit} bytes]"
+
+
+async def _run_subprocess(cmd: List[str], cwd: Path, timeout: int = 120) -> None:
+    proc = await asyncio.create_subprocess_exec(
+        *cmd,
+        cwd=str(cwd),
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    try:
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+    except asyncio.TimeoutError:
+        proc.kill()
+        await proc.communicate()
+        raise RuntimeError(f"Command timed out after {timeout}s: {' '.join(cmd)}")
+
+    out = stdout.decode(errors="replace")
+    err = stderr.decode(errors="replace")
+    if proc.returncode != 0:
+        raise RuntimeError(
+            f"Command failed ({proc.returncode}): {' '.join(cmd)}\nstdout: {_truncate_output(out)}\nstderr: {_truncate_output(err)}"
+        )
+    if out or err:
+        logger.info("Subprocess output", cmd=" ".join(cmd), stdout=_truncate_output(out), stderr=_truncate_output(err))
+
+
+async def _start_venv_service(service: PluginServiceRuntimeDTO) -> None:
+    meta = _resolve_venv_meta(service.name)
+    if not meta:
+        logger.warning("Unknown venv service; skipping start", name=service.name)
+        return
+    await _ensure_venv_repo(meta, service)
+
+    health_url = service.healthcheck_url or meta.get("health")
+    if health_url:
+        try:
+            if await wait_for_service_health(health_url, timeout=3):
+                logger.info("Service already healthy; skipping start", name=service.name, url=health_url)
+                return
+        except Exception:
+            # proceed to start
+            pass
+
+    repo = meta["repo"]
+    # optional install step if install_command provided
+    install_cmd = meta.get("install_cmd")
+    if install_cmd:
+        venv_dir = repo / ".venv"
+        if not venv_dir.exists():
+            logger.info("Venv missing; running install command", name=service.name)
+            await _run_subprocess(install_cmd, cwd=repo, timeout=300)
+
+    start_cmd = meta["start_cmd"]
+    logger.info("Starting venv service", name=service.name, cmd=" ".join(start_cmd))
+    await _run_subprocess(start_cmd, cwd=repo, timeout=180)
+
+
+async def _stop_venv_service(service: PluginServiceRuntimeDTO) -> None:
+    meta = _resolve_venv_meta(service.name)
+    if not meta:
+        logger.warning("Unknown venv service; skipping stop", name=service.name)
+        return
+    await _ensure_venv_repo(meta, service)
+    stop_cmd = meta.get("stop_cmd")
+    if not stop_cmd:
+        logger.warning("No stop command for venv service", name=service.name)
+        return
+    repo = meta["repo"]
+    logger.info("Stopping venv service", name=service.name, cmd=" ".join(stop_cmd))
+    try:
+        await _run_subprocess(stop_cmd, cwd=repo, timeout=60)
+    except Exception as e:
+        logger.warning("Stop command failed", name=service.name, error=str(e))
+
+
+async def _restart_venv_service(service: PluginServiceRuntimeDTO) -> None:
+    meta = _resolve_venv_meta(service.name)
+    if not meta:
+        logger.warning("Unknown venv service; skipping restart", name=service.name)
+        return
+    await _ensure_venv_repo(meta, service)
+    restart_cmd = meta.get("restart_cmd")
+    repo = meta["repo"]
+    if restart_cmd:
+        logger.info("Restarting venv service", name=service.name, cmd=" ".join(restart_cmd))
+        await _run_subprocess(restart_cmd, cwd=repo, timeout=180)
+        return
+    # fallback: stop then start
+    await _stop_venv_service(service)
+    await _start_venv_service(service)
+
+
+async def _ensure_venv_repo(meta: Dict, service: PluginServiceRuntimeDTO) -> None:
+  repo = meta["repo"]
+  if repo.exists():
+    return
+  repo.parent.mkdir(parents=True, exist_ok=True)
+  repo_url = service.source_url or meta.get("repo_url")
+  if not repo_url:
+    logger.warning("No repo_url provided for venv service", name=service.name)
+    return
+  logger.info("Cloning venv service repo", name=service.name, url=repo_url, dest=str(repo))
+  proc = await asyncio.create_subprocess_exec(
+    "git",
+    "clone",
+    repo_url,
+    str(repo),
+    stdout=asyncio.subprocess.PIPE,
+    stderr=asyncio.subprocess.PIPE,
+  )
+  stdout, stderr = await proc.communicate()
+  if proc.returncode != 0:
+    raise RuntimeError(f"Failed to clone {repo_url}: {stderr.decode()}")

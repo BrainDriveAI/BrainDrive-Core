@@ -4,6 +4,7 @@ from typing import Optional
 from app.core.database import db_factory
 from app.services.job_manager import JobManager, SleepJobHandler
 from app.services.job_handlers import OllamaInstallHandler
+from app.services.job_handlers.service_install import ServiceInstallHandler
 
 job_manager: Optional[JobManager] = None
 _handlers_registered = False
@@ -36,5 +37,6 @@ async def _ensure_job_manager() -> None:
     if not _handlers_registered:
         await job_manager.register_handler(SleepJobHandler())
         await job_manager.register_handler(OllamaInstallHandler())
+        await job_manager.register_handler(ServiceInstallHandler())
         _handlers_registered = True
     await job_manager.start()
