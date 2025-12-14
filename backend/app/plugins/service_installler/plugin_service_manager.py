@@ -35,21 +35,42 @@ VENV_SERVICE_MAP = {
         "repo": RUNTIME_BASE / "Document-Chat-Service",
         "repo_url": "https://github.com/DJJones66/Document-Chat-Service",
         "install_cmd": ["python3.11", "service_scripts/install_with_venv.py"],
-        "start_cmd": ["python3.11", "service_scripts/start_with_venv.py"],
-        "stop_cmd": ["python3.11", "service_scripts/shutdown_with_venv.py"],
-        "restart_cmd": ["python3.11", "service_scripts/restart_with_venv.py"],
+        "start_cmd": [str(RUNTIME_BASE / "Document-Chat-Service/.venv/bin/python"), "service_scripts/start_with_venv.py"],
+        "stop_cmd": [str(RUNTIME_BASE / "Document-Chat-Service/.venv/bin/python"), "service_scripts/shutdown_with_venv.py"],
+        "restart_cmd": [str(RUNTIME_BASE / "Document-Chat-Service/.venv/bin/python"), "service_scripts/restart_with_venv.py"],
         "health": "http://localhost:18000/health",
     },
     "document_processing": {
         "repo": RUNTIME_BASE / "Document-Processing-Service",
         "repo_url": "https://github.com/DJJones66/Document-Processing-Service",
         "install_cmd": ["python3.11", "service_scripts/install_with_venv.py"],
-        "start_cmd": ["python3.11", "service_scripts/start_with_venv.py"],
-        "stop_cmd": ["python3.11", "service_scripts/shutdown_with_venv.py"],
-        "restart_cmd": ["python3.11", "service_scripts/restart_with_venv.py"],
+        "start_cmd": [str(RUNTIME_BASE / "Document-Processing-Service/.venv/bin/python"), "service_scripts/start_with_venv.py"],
+        "stop_cmd": [str(RUNTIME_BASE / "Document-Processing-Service/.venv/bin/python"), "service_scripts/shutdown_with_venv.py"],
+        "restart_cmd": [str(RUNTIME_BASE / "Document-Processing-Service/.venv/bin/python"), "service_scripts/restart_with_venv.py"],
         "health": "http://localhost:18080/health",
     },
 }
+
+def _service_env(service: PluginServiceRuntimeDTO) -> Dict[str, str]:
+    """
+    Provide per-service environment overrides to keep venv services isolated
+    from the core backend's env (e.g., DATABASE_URL).
+    """
+    env: Dict[str, str] = {}
+    meta = _resolve_venv_meta(service.name)
+    if not meta:
+        return env
+
+    # Ensure async sqlite driver for doc chat so it doesn't inherit core DATABASE_URL
+    if service.name == "document_chat":
+        db_path = meta["repo"] / "data" / "app.db"
+        env["DATABASE_URL"] = f"sqlite+aiosqlite:///{db_path}"
+        env.setdefault("LOG_LEVEL", "INFO")
+    elif service.name == "document_processing":
+        env.setdefault("LOG_LEVEL", "INFO")
+        env.setdefault("DISABLE_AUTH", "true")
+
+    return env
 
 def ensure_service_dto(
     service_data: Union[Dict, PluginServiceRuntimeDTO], 
@@ -416,10 +437,51 @@ def _truncate_output(text: str, limit: int = 1200) -> str:
     return text[:limit] + f"\n... [truncated {len(text) - limit} bytes]"
 
 
-async def _run_subprocess(cmd: List[str], cwd: Path, timeout: int = 120) -> None:
+async def _monitor_process(proc: asyncio.subprocess.Process, cmd: List[str], log_file: Path) -> None:
+    rc = await proc.wait()
+    try:
+        with log_file.open("a", encoding="utf-8") as fh:
+            fh.write(f"\n[{cmd}] exited with rc={rc}\n")
+    except Exception:
+        pass
+
+
+async def _run_subprocess(
+    cmd: List[str],
+    cwd: Path,
+    timeout: int = 120,
+    env: Optional[Dict[str, str]] = None,
+    wait: bool = True,
+) -> None:
+    """
+    Run a subprocess and append stdout/stderr to the service_runtime.log in cwd for visibility.
+    When wait=False the process is started in the background with output redirected to the log file.
+    """
+    log_file = cwd / "service_runtime.log"
+    merged_env = {**os.environ, **(env or {})}
+
+    if not wait:
+        # Fire-and-forget with output redirected to the log file.
+        log_file.parent.mkdir(parents=True, exist_ok=True)
+        with log_file.open("a", encoding="utf-8") as fh:
+            fh.write(f"\n[{cmd}] starting in background\n")
+        log_handle = log_file.open("ab")
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            cwd=str(cwd),
+            env=merged_env,
+            stdout=log_handle,
+            stderr=log_handle,
+        )
+        log_handle.close()
+        asyncio.create_task(_monitor_process(proc, cmd, log_file))
+        logger.info("Started background subprocess", cmd=" ".join(cmd), pid=proc.pid)
+        return
+
     proc = await asyncio.create_subprocess_exec(
         *cmd,
         cwd=str(cwd),
+        env=merged_env,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
@@ -428,10 +490,27 @@ async def _run_subprocess(cmd: List[str], cwd: Path, timeout: int = 120) -> None
     except asyncio.TimeoutError:
         proc.kill()
         await proc.communicate()
+        try:
+            with log_file.open("a", encoding="utf-8") as fh:
+                fh.write(f"\n[{cmd}] timed out after {timeout}s\n")
+        except Exception:
+            pass
         raise RuntimeError(f"Command timed out after {timeout}s: {' '.join(cmd)}")
 
     out = stdout.decode(errors="replace")
     err = stderr.decode(errors="replace")
+    # Always append output to the service log for troubleshooting
+    try:
+        with log_file.open("a", encoding="utf-8") as fh:
+            fh.write(f"\n[{cmd}] rc={proc.returncode}\n")
+            if out:
+                fh.write(out)
+            if err:
+                fh.write("\n-- stderr --\n")
+                fh.write(err)
+    except Exception:
+        pass
+
     if proc.returncode != 0:
         raise RuntimeError(
             f"Command failed ({proc.returncode}): {' '.join(cmd)}\nstdout: {_truncate_output(out)}\nstderr: {_truncate_output(err)}"
@@ -468,7 +547,7 @@ async def _start_venv_service(service: PluginServiceRuntimeDTO) -> None:
 
     start_cmd = meta["start_cmd"]
     logger.info("Starting venv service", name=service.name, cmd=" ".join(start_cmd))
-    await _run_subprocess(start_cmd, cwd=repo, timeout=180)
+    await _run_subprocess(start_cmd, cwd=repo, timeout=180, env=_service_env(service), wait=False)
 
 
 async def _stop_venv_service(service: PluginServiceRuntimeDTO) -> None:
@@ -484,7 +563,7 @@ async def _stop_venv_service(service: PluginServiceRuntimeDTO) -> None:
     repo = meta["repo"]
     logger.info("Stopping venv service", name=service.name, cmd=" ".join(stop_cmd))
     try:
-        await _run_subprocess(stop_cmd, cwd=repo, timeout=60)
+        await _run_subprocess(stop_cmd, cwd=repo, timeout=60, env=_service_env(service))
     except Exception as e:
         logger.warning("Stop command failed", name=service.name, error=str(e))
 
@@ -499,7 +578,7 @@ async def _restart_venv_service(service: PluginServiceRuntimeDTO) -> None:
     repo = meta["repo"]
     if restart_cmd:
         logger.info("Restarting venv service", name=service.name, cmd=" ".join(restart_cmd))
-        await _run_subprocess(restart_cmd, cwd=repo, timeout=180)
+        await _run_subprocess(restart_cmd, cwd=repo, timeout=180, env=_service_env(service), wait=False)
         return
     # fallback: stop then start
     await _stop_venv_service(service)

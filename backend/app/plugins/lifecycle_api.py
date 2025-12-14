@@ -432,11 +432,13 @@ async def restart_plugin_service(
 ):
     """
     Restart one or all plugin services using DB-stored environment variables.
+    Supports optional env payload to refresh .env files before restart.
     Requires plugin_slug, definition_id and user_id (body).
     """
     service_name = payload.get("service_name")
     definition_id = payload.get("definition_id")
     user_id = payload.get("user_id")
+    env_payload = payload.get("env")
 
     # If user_id is specified, ensure it matches the current user's ID (if authenticated)
     if user_id:
@@ -462,6 +464,14 @@ async def restart_plugin_service(
         raise HTTPException(status_code=400, detail="definition_id is required")
     
     async def restart_task():
+        # Optionally refresh .env files via plugin lifecycle manager if available
+        if env_payload:
+            try:
+                manager = universal_manager._load_plugin_manager(plugin_slug)
+                if hasattr(manager, "apply_env_updates"):
+                    await manager.apply_env_updates(env_payload, restart=False)  # Write .env only
+            except Exception as exc:
+                logger.warning("Env update skipped during restart", plugin_slug=plugin_slug, error=str(exc))
         await restart_plugin_services(plugin_slug, definition_id, user_id, service_name)
 
     background_tasks.add_task(restart_task)
