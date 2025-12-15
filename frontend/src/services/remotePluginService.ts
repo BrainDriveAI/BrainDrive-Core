@@ -257,8 +257,13 @@ class RemotePluginService {
             }
             
             if (!container) {
-              // Log all available properties on window for debugging
-              //// console.log('Available window properties:', Object.keys(window).filter(key => typeof (window as any)[key] === 'object'));
+              const windowMatches = Object.keys(window)
+                .filter(key => key.toLowerCase().includes(scope.toLowerCase()) || key.toLowerCase().includes((manifest?.id || '').toLowerCase()))
+                .slice(0, 20);
+              console.error(
+                `[plugins] Scope container missing for ${scope}. Tried variations: ${scopeVariations.join(", ")}` +
+                (windowMatches.length ? ` | window matches: ${windowMatches.join(", ")}` : '')
+              );
               throw new Error(`Container not found for any scope variation of ${scope}`);
             }
 
@@ -305,6 +310,10 @@ class RemotePluginService {
                   if (!factory) {
                     // Log available modules in container
                     //// console.log('Available modules in container:', Object.keys(container));
+                    const availableKeys = Object.keys(container || {}).slice(0, 10);
+                    console.error(
+                      `[plugins] Module factory missing for ${moduleConfig.name} in ${usedScope || scope}. Tried: ${moduleNames.join(", ")}; available keys: ${availableKeys.join(", ")}`
+                    );
                     
                     // Try to use a direct property if available
                     if (typeof container[moduleConfig.name] === 'function') {
