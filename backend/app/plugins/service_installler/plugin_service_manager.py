@@ -422,6 +422,99 @@ async def restart_plugin_services(plugin_slug: str, definition_id: str, user_id:
         return results
 
 
+async def start_plugin_services_from_db(plugin_slug: str, definition_id: str, user_id: str = None, service_name: str = None):
+    """
+    Start one or all services for a given plugin, using env vars from DB.
+    """
+    async for db in get_db():
+        repo = PluginRepository(db)
+
+        plugin_data = await repo.get_plugin_by_slug(plugin_slug, user_id)
+        if not plugin_data:
+            raise ValueError(f"Plugin {plugin_slug} not found")
+
+        plugin_id = plugin_data["id"]
+        service_runtimes = await repo.get_service_runtimes_by_plugin_id(plugin_id)
+        if not service_runtimes:
+            raise RuntimeError(f"No services found for plugin {plugin_id}")
+
+        env_vars = await repo.get_settings_env_vars(definition_id, user_id) or {}
+
+        results: Dict[str, str] = {}
+        for service_runtime in service_runtimes:
+            if service_name and service_runtime.name != service_name:
+                continue
+
+            target_dir = Path("services_runtime") / f"{service_runtime.plugin_slug}_{service_runtime.name}"
+            service_type = service_runtime.type or "docker-compose"
+
+            try:
+                if service_type == "docker-compose":
+                    logger.info(f"Starting Docker service: {service_runtime.name}")
+                    await restart_docker_service(
+                        service_runtime,
+                        target_dir,
+                        env_vars,
+                        service_runtime.required_env_vars or []
+                    )
+                elif service_type == "python":
+                    await install_python_service(service_runtime, target_dir)
+                elif service_type == "venv_process":
+                    await _start_venv_service(service_runtime)
+                else:
+                    logger.warning("Skipping unknown service type", type=service_type, name=service_runtime.name)
+                    results[service_runtime.name] = "skipped"
+                    continue
+
+                results[service_runtime.name] = "started"
+            except Exception as e:
+                results[service_runtime.name] = f"failed: {str(e)}"
+
+        return results
+
+
+async def stop_plugin_services_from_db(plugin_slug: str, definition_id: str, user_id: str = None, service_name: str = None):
+    """
+    Stop one or all services for a given plugin.
+    """
+    async for db in get_db():
+        repo = PluginRepository(db)
+
+        plugin_data = await repo.get_plugin_by_slug(plugin_slug, user_id)
+        if not plugin_data:
+            raise ValueError(f"Plugin {plugin_slug} not found")
+
+        plugin_id = plugin_data["id"]
+        service_runtimes = await repo.get_service_runtimes_by_plugin_id(plugin_id)
+        if not service_runtimes:
+            raise RuntimeError(f"No services found for plugin {plugin_id}")
+
+        results: Dict[str, str] = {}
+        for service_runtime in service_runtimes:
+            if service_name and service_runtime.name != service_name:
+                continue
+
+            target_dir = Path("services_runtime") / f"{service_runtime.plugin_slug}_{service_runtime.name}"
+            service_type = service_runtime.type or "docker-compose"
+
+            try:
+                if service_type == "docker-compose":
+                    logger.info(f"Stopping Docker service: {service_runtime.name}")
+                    await stop_docker_service(service_runtime, target_dir)
+                elif service_type == "venv_process":
+                    await _stop_venv_service(service_runtime)
+                else:
+                    logger.warning("Skipping unknown service type", type=service_type, name=service_runtime.name)
+                    results[service_runtime.name] = "skipped"
+                    continue
+
+                results[service_runtime.name] = "stopped"
+            except Exception as e:
+                results[service_runtime.name] = f"failed: {str(e)}"
+
+        return results
+
+
 def _resolve_venv_meta(service_name: str) -> Optional[Dict]:
     key = service_name
     if key in VENV_SERVICE_MAP:
