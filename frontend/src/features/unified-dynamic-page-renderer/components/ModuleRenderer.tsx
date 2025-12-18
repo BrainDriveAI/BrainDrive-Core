@@ -8,6 +8,54 @@ import ComponentErrorBoundary from '../../../components/ComponentErrorBoundary';
 import { eventBus } from '../../../plugin/eventBus';
 import { createServiceBridges, ServiceError } from '../../../utils/serviceBridge';
 
+const REACT_FORWARD_REF_TYPE = Symbol.for('react.forward_ref');
+const REACT_MEMO_TYPE = Symbol.for('react.memo');
+const REACT_LAZY_TYPE = Symbol.for('react.lazy');
+const REACT_CONTEXT_TYPE = Symbol.for('react.context');
+const REACT_PROVIDER_TYPE = Symbol.for('react.provider');
+
+function isValidReactElementType(value: any): boolean {
+  if (!value) return false;
+  const type = typeof value;
+
+  if (type === 'string' || type === 'function' || type === 'symbol') return true;
+  if (type !== 'object') return false;
+
+  const $$typeof = (value as any).$$typeof;
+  return (
+    $$typeof === REACT_FORWARD_REF_TYPE ||
+    $$typeof === REACT_MEMO_TYPE ||
+    $$typeof === REACT_LAZY_TYPE ||
+    $$typeof === REACT_CONTEXT_TYPE ||
+    $$typeof === REACT_PROVIDER_TYPE
+  );
+}
+
+function resolveFederatedComponent(maybeModule: any): React.ComponentType<any> | null {
+  let current = maybeModule;
+  const visited = new Set<any>();
+
+  for (let depth = 0; depth < 6; depth++) {
+    if (isValidReactElementType(current)) return current as any;
+
+    if (!current) break;
+    const type = typeof current;
+    if (type !== 'object' && type !== 'function') break;
+
+    if (visited.has(current)) break;
+    visited.add(current);
+
+    if ('default' in (current as any)) {
+      current = (current as any).default;
+      continue;
+    }
+
+    break;
+  }
+
+  return null;
+}
+
 export interface ModuleRendererProps {
   pluginId: string;
   moduleId: string;
@@ -459,10 +507,16 @@ const UnifiedModuleRenderer: React.FC<UnifiedModuleRendererProps> = ({
 
   // Render the module component - integrated DynamicPluginRenderer functionality
   try {
-    const Component = module.component;
+    const Component = resolveFederatedComponent(module.component);
     
     if (!Component) {
-      throw new Error('Module component is null or undefined');
+      const exportKeys =
+        module.component && typeof module.component === 'object' ? Object.keys(module.component) : [];
+      throw new Error(
+        `Invalid module component export for ${pluginId}:${moduleId}. ` +
+          `Expected a React component (default export). ` +
+          `Got ${typeof module.component}${exportKeys.length ? ` (keys: ${exportKeys.join(', ')})` : ''}`
+      );
     }
 
     if (process.env.NODE_ENV === 'development') {

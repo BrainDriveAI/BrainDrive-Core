@@ -11,6 +11,54 @@ declare global {
   }
 }
 
+const REACT_FORWARD_REF_TYPE = Symbol.for('react.forward_ref');
+const REACT_MEMO_TYPE = Symbol.for('react.memo');
+const REACT_LAZY_TYPE = Symbol.for('react.lazy');
+const REACT_CONTEXT_TYPE = Symbol.for('react.context');
+const REACT_PROVIDER_TYPE = Symbol.for('react.provider');
+
+function isValidReactElementType(value: any): boolean {
+  if (!value) return false;
+  const type = typeof value;
+
+  if (type === 'string' || type === 'function' || type === 'symbol') return true;
+  if (type !== 'object') return false;
+
+  const $$typeof = (value as any).$$typeof;
+  return (
+    $$typeof === REACT_FORWARD_REF_TYPE ||
+    $$typeof === REACT_MEMO_TYPE ||
+    $$typeof === REACT_LAZY_TYPE ||
+    $$typeof === REACT_CONTEXT_TYPE ||
+    $$typeof === REACT_PROVIDER_TYPE
+  );
+}
+
+function resolveFederatedComponent(moduleInstance: any): any | null {
+  let current = moduleInstance;
+  const visited = new Set<any>();
+
+  for (let depth = 0; depth < 6; depth++) {
+    if (isValidReactElementType(current)) return current;
+
+    if (!current) break;
+    const type = typeof current;
+    if (type !== 'object' && type !== 'function') break;
+
+    if (visited.has(current)) break;
+    visited.add(current);
+
+    if ('default' in (current as any)) {
+      current = (current as any).default;
+      continue;
+    }
+
+    break;
+  }
+
+  return null;
+}
+
 class RemotePluginService {
   private loadedPlugins: Map<string, LoadedRemotePlugin> = new Map();
   private loadingPromises: Map<string, Promise<LoadedRemotePlugin>> = new Map();
@@ -407,40 +455,50 @@ class RemotePluginService {
                   
                   //// console.log(`Factory received for ${usedModuleName}:`, factory);
                   
-                  // Create the module instance
-                  const moduleInstance = factory();
-                  //// console.log(`Module instance created for ${usedModuleName}:`, moduleInstance);
-                  
-                  // Debug the module configuration
-                  //// console.log(`[ModuleDebug] Module config for ${moduleConfig.name}:`, {
-                  //  moduleConfig,
-                  //  hasRequiredServices: !!moduleConfig.requiredServices,
-                  //  requiredServices: moduleConfig.requiredServices
-                  //});
-                  
-                  // Return the loaded module
-                  return {
-                    name: moduleConfig.name,
-                    id: moduleConfig.id || moduleConfig.name,
-                    displayName: moduleConfig.displayName || moduleConfig.name,
-                    description: moduleConfig.description,
-                    icon: moduleConfig.icon,
-                    category: moduleConfig.category,
-                    tags: moduleConfig.tags,
-                    props: moduleConfig.props,
-                    configFields: moduleConfig.configFields,
-                    messages: moduleConfig.messages,
-                    priority: moduleConfig.priority,
-                    dependencies: moduleConfig.dependencies,
-                    layout: moduleConfig.layout,
-                    type: moduleConfig.type,
-                    component: moduleInstance.default || moduleInstance,
-                    requiredServices: moduleConfig.requiredServices
-                  } as LoadedModule;
-                } catch (error) {
-                  console.error(`Failed to load module ${moduleConfig.name}:`, error);
-                  throw error;
-                }
+	                  // Create the module instance
+	                  const moduleInstance = factory();
+	                  //// console.log(`Module instance created for ${usedModuleName}:`, moduleInstance);
+	                  const component = resolveFederatedComponent(moduleInstance);
+	                  if (!component) {
+	                    const exportKeys =
+	                      moduleInstance && typeof moduleInstance === 'object' ? Object.keys(moduleInstance) : [];
+	                    throw new Error(
+	                      `[plugins] Invalid module export for ${manifest.id}:${moduleConfig.name}. ` +
+	                        `Expected a React component (default export). ` +
+	                        `Got ${typeof moduleInstance}${exportKeys.length ? ` (keys: ${exportKeys.join(', ')})` : ''}`
+	                    );
+	                  }
+	                  
+	                  // Debug the module configuration
+	                  //// console.log(`[ModuleDebug] Module config for ${moduleConfig.name}:`, {
+	                  //  moduleConfig,
+	                  //  hasRequiredServices: !!moduleConfig.requiredServices,
+	                  //  requiredServices: moduleConfig.requiredServices
+	                  //});
+	                  
+	                  // Return the loaded module
+	                  return {
+	                    name: moduleConfig.name,
+	                    id: moduleConfig.id || moduleConfig.name,
+	                    displayName: moduleConfig.displayName || moduleConfig.name,
+	                    description: moduleConfig.description,
+	                    icon: moduleConfig.icon,
+	                    category: moduleConfig.category,
+	                    tags: moduleConfig.tags,
+	                    props: moduleConfig.props,
+	                    configFields: moduleConfig.configFields,
+	                    messages: moduleConfig.messages,
+	                    priority: moduleConfig.priority,
+	                    dependencies: moduleConfig.dependencies,
+	                    layout: moduleConfig.layout,
+	                    type: moduleConfig.type,
+	                    component,
+	                    requiredServices: moduleConfig.requiredServices
+	                  } as LoadedModule;
+	                } catch (error) {
+	                  console.error(`Failed to load module ${moduleConfig.name}:`, error);
+	                  throw error;
+	                }
               })
             );
 
