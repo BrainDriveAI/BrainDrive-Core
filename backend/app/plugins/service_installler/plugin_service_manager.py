@@ -27,7 +27,19 @@ from app.plugins.service_installler.service_health_checker import wait_for_servi
 
 logger = structlog.get_logger()
 
-RUNTIME_BASE = Path("/home/hacker/hank/BrainDrive-Core/backend/services_runtime")
+SERVICES_RUNTIME_ENV_VAR = "BRAINDRIVE_SERVICES_RUNTIME_DIR"
+
+
+def _resolve_services_runtime_dir() -> Path:
+    override = str(os.environ.get(SERVICES_RUNTIME_ENV_VAR, "")).strip()
+    if override:
+        return Path(override).expanduser().resolve()
+    # /backend/app/plugins/service_installler/plugin_service_manager.py -> /backend
+    backend_root = Path(__file__).resolve().parents[3]
+    return (backend_root / "services_runtime").resolve()
+
+
+RUNTIME_BASE = _resolve_services_runtime_dir()
 
 # Static mapping for venv-managed services (local clones under services_runtime)
 VENV_SERVICE_MAP = {
@@ -100,7 +112,7 @@ async def install_and_run_required_services(
         plugin_id: Plugin ID (required when services_runtime contains dicts)
         user_id: User ID (required when services_runtime contains dicts)
     """
-    base_services_dir = Path("services_runtime")
+    base_services_dir = RUNTIME_BASE
     base_services_dir.mkdir(parents=True, exist_ok=True)
 
     # Define the path to the root .env file
