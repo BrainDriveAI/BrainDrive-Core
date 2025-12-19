@@ -67,14 +67,6 @@ class RemotePluginService {
   private api = ApiService.getInstance();
 
   private async initializeSharing(): Promise<void> {
-    // Check if sharing is already initialized
-    if (window.__webpack_share_scopes__?.default) {
-      // console.log('Webpack share scopes already initialized');
-      return;
-    }
-    
-    // console.log('Initializing webpack share scopes');
-    
     // Initialize the share scope
     // @ts-ignore
     window.__webpack_share_scopes__ = window.__webpack_share_scopes__ || {};
@@ -168,7 +160,13 @@ class RemotePluginService {
       }
       
       // Use the public endpoint for plugin bundles to avoid authentication issues
-      const pluginUrl = `${baseApiUrl}/api/v1/public/plugins/${effectiveId}/${cleanUrl}`;
+      let pluginUrl = `${baseApiUrl}/api/v1/public/plugins/${effectiveId}/${cleanUrl}`;
+
+      // Cache-bust remoteEntry so plugin updates don't reuse stale chunk maps.
+      if (cleanUrl.endsWith('remoteEntry.js') && manifest?.version) {
+        const joiner = pluginUrl.includes('?') ? '&' : '?';
+        pluginUrl = `${pluginUrl}${joiner}v=${encodeURIComponent(manifest.version)}`;
+      }
       //// console.log(`Constructed plugin URL: ${pluginUrl} for plugin ${pluginId} with path ${cleanUrl}`);
       return pluginUrl;
     }
@@ -322,139 +320,60 @@ class RemotePluginService {
             const loadedModules = await Promise.all(
               modules.map(async (moduleConfig) => {
                 try {
-                  // Get the factory for this module
-                  // Try with and without "./" prefix for the module name
-                  const moduleNames = [
-                    moduleConfig.name,
-                    `./${moduleConfig.name}`,
-                    // For webpack, module names are often prefixed with "./"
-                    moduleConfig.name.startsWith('./') ? moduleConfig.name.substring(2) : moduleConfig.name
-                  ];
-                  
-                  let factory = null;
-                  let usedModuleName = '';
-                  
-                  // Try each module name variation
-                  for (const moduleName of moduleNames) {
-                    //// console.log(`Trying to get factory for module: ${moduleName}`);
-                    try {
-                      // Check if container has the get method
-                      if (typeof container.get !== 'function') {
-                        console.warn(`Container for ${manifest.id} does not have a get method`);
-                        continue;
-                      }
-                      
-                      factory = await container.get(moduleName);
-                      if (factory) {
-                        usedModuleName = moduleName;
-                        //// console.log(`Found factory with module name: ${usedModuleName}`);
-                        break;
-                      }
-                    } catch (e) {
-                      //// console.log(`Module ${moduleName} not found, trying next variation`);
-                    }
-                  }
-                  
-                  if (!factory) {
-                    // Log available modules in container
-                    //// console.log('Available modules in container:', Object.keys(container));
-                    const availableKeys = Object.keys(container || {}).slice(0, 10);
-                    console.error(
-                      `[plugins] Module factory missing for ${moduleConfig.name} in ${usedScope || scope}. Tried: ${moduleNames.join(", ")}; available keys: ${availableKeys.join(", ")}`
-                    );
-                    
-                    // Try to use a direct property if available
-                    if (typeof container[moduleConfig.name] === 'function') {
-                     // // console.log(`Found module ${moduleConfig.name} as a direct property`);
-                      factory = container[moduleConfig.name];
-                    } else if (moduleConfig.name.startsWith('./') && typeof container[moduleConfig.name.substring(2)] === 'function') {
-                      const simpleName = moduleConfig.name.substring(2);
-                      //// console.log(`Found module ${simpleName} as a direct property`);
-                      factory = container[simpleName];
-                    }
-                    
-                    // If still no factory, check for global exports from the script
-                    if (!factory) {
-                      const globalName = manifest.id.replace(/-/g, '_');
-                      //// console.log(`Checking for global exports with name: ${globalName}`);
-                      
-                      if ((window as any)[globalName]) {
-                        //// console.log(`Found global export for ${manifest.id}`);
-                        
-                        // Check if the module is directly exposed on the global object
-                        if ((window as any)[globalName][moduleConfig.name]) {
-                          //// console.log(`Found module ${moduleConfig.name} on global object`);
-                          factory = () => (window as any)[globalName][moduleConfig.name];
-                        } else if ((window as any)[globalName]['default']) {
-                          //// console.log(`Found default export on global object`);
-                          factory = () => (window as any)[globalName]['default'];
-                        }
-                      }
-                      
-                      // Last resort: try to find the module in the window object directly
-                      if (!factory) {
-                        // Try common naming patterns for the module
-                        const moduleNames = [
-                          moduleConfig.name,
-                          moduleConfig.name.charAt(0).toLowerCase() + moduleConfig.name.slice(1),
-                          moduleConfig.name.charAt(0).toUpperCase() + moduleConfig.name.slice(1)
-                        ];
-                        
-                        for (const name of moduleNames) {
-                          if ((window as any)[name]) {
-                            //// console.log(`Found module ${name} directly in window object`);
-                            factory = () => (window as any)[name];
-                            break;
-                          }
-                        }
-                      }
-                      
-                      // If still no factory, create a fallback component
-                      if (!factory) {
-                        console.warn(`Creating fallback component for ${moduleConfig.name}`);
-                        factory = () => {
-                          // Create a React component that shows an error message
-                          return {
-                            default: (props: any) => {
-                              return {
-                                $$typeof: Symbol.for('react.element'),
-                                type: 'div',
-                                props: {
-                                  children: [
-                                    {
-                                      $$typeof: Symbol.for('react.element'),
-                                      type: 'h3',
-                                      props: { children: `Plugin Module Not Found: ${moduleConfig.name}` },
-                                      key: null,
-                                      ref: null
-                                    },
-                                    {
-                                      $$typeof: Symbol.for('react.element'),
-                                      type: 'p',
-                                      props: { children: `The module "${moduleConfig.name}" could not be loaded from plugin "${manifest.id}".` },
-                                      key: null,
-                                      ref: null
-                                    }
-                                  ],
-                                  style: {
-                                    padding: '16px',
-                                    border: '1px solid #f44336',
-                                    borderRadius: '4px',
-                                    backgroundColor: '#ffebee'
-                                  }
-                                },
-                                key: null,
-                                ref: null
-                              };
-                            }
-                          };
-                        };
-                      }
-                    }
-                  }
-                  
-                  //// console.log(`Factory received for ${usedModuleName}:`, factory);
-                  
+	                  // Get the factory for this module
+	                  // Try with and without "./" prefix for the module name
+	                  const moduleNames = Array.from(new Set([
+	                    // Prefer the webpack expose-style name first
+	                    moduleConfig.name?.startsWith('./') ? moduleConfig.name : `./${moduleConfig.name}`,
+	                    moduleConfig.name,
+	                    // Try without "./" prefix as a fallback
+	                    moduleConfig.name?.startsWith('./') ? moduleConfig.name.substring(2) : moduleConfig.name
+	                  ].filter((v): v is string => typeof v === 'string' && v.length > 0)));
+	                  
+	                  let factory = null;
+	                  let usedModuleName = '';
+	                  const getErrors: Array<{ name: string; error: string }> = [];
+	                  
+	                  // Try each module name variation
+	                  for (const moduleName of moduleNames) {
+	                    //// console.log(`Trying to get factory for module: ${moduleName}`);
+	                    try {
+	                      // Check if container has the get method
+	                      if (typeof container.get !== 'function') {
+	                        console.warn(`Container for ${manifest.id} does not have a get method`);
+	                        getErrors.push({ name: moduleName, error: 'container.get is not a function' });
+	                        continue;
+	                      }
+	                      
+	                      factory = await container.get(moduleName);
+	                      if (factory) {
+	                        usedModuleName = moduleName;
+	                        //// console.log(`Found factory with module name: ${usedModuleName}`);
+	                        break;
+	                      }
+	                      getErrors.push({ name: moduleName, error: 'factory was empty' });
+	                    } catch (e) {
+	                      getErrors.push({
+	                        name: moduleName,
+	                        error: e instanceof Error ? e.message : String(e)
+	                      });
+	                    }
+	                  }
+	                  
+	                  if (!factory) {
+	                    const availableKeys = Object.keys(container || {}).slice(0, 10);
+	                    const errorDetails = getErrors
+	                      .map(({ name, error }) => `${name}: ${error}`)
+	                      .join(' | ');
+	                    throw new Error(
+	                      `[plugins] Module factory missing for ${moduleConfig.name} in ${usedScope || scope}. ` +
+	                        `Tried: ${moduleNames.join(', ')}; available keys: ${availableKeys.join(', ')}` +
+	                        (errorDetails ? `; errors: ${errorDetails}` : '')
+	                    );
+	                  }
+	                  
+	                  //// console.log(`Factory received for ${usedModuleName}:`, factory);
+	                  
 	                  // Create the module instance
 	                  const moduleInstance = factory();
 	                  //// console.log(`Module instance created for ${usedModuleName}:`, moduleInstance);
