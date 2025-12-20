@@ -769,6 +769,8 @@ async def get_models(
         return {
             "models": models
         }
+    except HTTPException:
+        raise
     except Exception as e:
         print(f"Error in get_models: {e}")
         import traceback

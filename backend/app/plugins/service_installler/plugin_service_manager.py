@@ -1,4 +1,6 @@
 import os
+import re
+import shlex
 import zipfile
 import tarfile
 import tempfile
@@ -41,48 +43,185 @@ def _resolve_services_runtime_dir() -> Path:
 
 RUNTIME_BASE = _resolve_services_runtime_dir()
 
-# Static mapping for venv-managed services (local clones under services_runtime)
-VENV_SERVICE_MAP = {
-    "document_chat": {
-        "repo": RUNTIME_BASE / "Document-Chat-Service",
-        "repo_url": "https://github.com/DJJones66/Document-Chat-Service",
-        "install_cmd": ["python3.11", "service_scripts/install_with_venv.py"],
-        "start_cmd": [str(RUNTIME_BASE / "Document-Chat-Service/.venv/bin/python"), "service_scripts/start_with_venv.py"],
-        "stop_cmd": [str(RUNTIME_BASE / "Document-Chat-Service/.venv/bin/python"), "service_scripts/shutdown_with_venv.py"],
-        "restart_cmd": [str(RUNTIME_BASE / "Document-Chat-Service/.venv/bin/python"), "service_scripts/restart_with_venv.py"],
-        "health": "http://localhost:18000/health",
-    },
-    "document_processing": {
-        "repo": RUNTIME_BASE / "Document-Processing-Service",
-        "repo_url": "https://github.com/DJJones66/Document-Processing-Service",
-        "install_cmd": ["python3.11", "service_scripts/install_with_venv.py"],
-        "start_cmd": [str(RUNTIME_BASE / "Document-Processing-Service/.venv/bin/python"), "service_scripts/start_with_venv.py"],
-        "stop_cmd": [str(RUNTIME_BASE / "Document-Processing-Service/.venv/bin/python"), "service_scripts/shutdown_with_venv.py"],
-        "restart_cmd": [str(RUNTIME_BASE / "Document-Processing-Service/.venv/bin/python"), "service_scripts/restart_with_venv.py"],
-        "health": "http://localhost:18080/health",
-    },
+DEFAULT_PYTHON_BIN = os.environ.get("PYTHON_BIN", "python3.11")
+DEFAULT_ENV_INHERIT = "minimal"
+ENV_INHERIT_ALL = "all"
+MINIMAL_ENV_KEYS = {
+    "PATH",
+    "HOME",
+    "USER",
+    "LOGNAME",
+    "LANG",
+    "LC_ALL",
+    "LC_CTYPE",
+    "SHELL",
+    "TMPDIR",
+    "TEMP",
+    "TMP",
+    "SYSTEMROOT",
+    "WINDIR",
+    "COMSPEC",
+    "PATHEXT",
+    "APPDATA",
+    "LOCALAPPDATA",
 }
+MINIMAL_ENV_KEYS_UPPER = {key.upper() for key in MINIMAL_ENV_KEYS}
 
-def _service_env(service: PluginServiceRuntimeDTO) -> Dict[str, str]:
-    """
-    Provide per-service environment overrides to keep venv services isolated
-    from the core backend's env (e.g., DATABASE_URL).
-    """
-    env: Dict[str, str] = {}
-    meta = _resolve_venv_meta(service.name)
-    if not meta:
-        return env
+_RUNTIME_KEY_SANITIZER = re.compile(r"[^A-Za-z0-9._-]+")
 
-    # Ensure async sqlite driver for doc chat so it doesn't inherit core DATABASE_URL
-    if service.name == "document_chat":
-        db_path = meta["repo"] / "data" / "app.db"
-        env["DATABASE_URL"] = f"sqlite+aiosqlite:///{db_path}"
-        env.setdefault("LOG_LEVEL", "INFO")
-    elif service.name == "document_processing":
-        env.setdefault("LOG_LEVEL", "INFO")
-        env.setdefault("DISABLE_AUTH", "true")
 
-    return env
+def _sanitize_runtime_key(value: str) -> str:
+    cleaned = _RUNTIME_KEY_SANITIZER.sub("_", value.strip())
+    cleaned = cleaned.strip("_")
+    return cleaned or "service"
+
+
+def _runtime_key_from_source_url(source_url: Optional[str]) -> Optional[str]:
+    if not source_url:
+        return None
+    cleaned = source_url.strip().rstrip("/")
+    if cleaned.endswith(".git"):
+        cleaned = cleaned[:-4]
+    if "://" in cleaned:
+        _, remainder = cleaned.split("://", 1)
+        path = remainder.split("/", 1)[-1] if "/" in remainder else ""
+    else:
+        # Handle git@host:owner/repo or local paths.
+        path = cleaned.split(":", 1)[-1]
+    if not path:
+        return None
+    repo = path.split("/")[-1]
+    return repo or None
+
+
+def _resolve_runtime_dir(service: PluginServiceRuntimeDTO, plugin_slug: Optional[str] = None) -> Path:
+    runtime_dir_key = getattr(service, "runtime_dir_key", None)
+    if runtime_dir_key:
+        explicit_dir = RUNTIME_BASE / _sanitize_runtime_key(runtime_dir_key)
+        plugin_slug = plugin_slug or getattr(service, "plugin_slug", None)
+        legacy_key = f"{plugin_slug}_{service.name}" if plugin_slug and service.name else None
+        legacy_dir = (RUNTIME_BASE / legacy_key) if legacy_key else None
+        if legacy_dir and legacy_dir.exists() and not explicit_dir.exists():
+            return legacy_dir
+        return explicit_dir
+
+    plugin_slug = plugin_slug or getattr(service, "plugin_slug", None)
+    legacy_key = f"{plugin_slug}_{service.name}" if plugin_slug and service.name else None
+    derived_key = _runtime_key_from_source_url(service.source_url) or service.name or legacy_key or "service"
+
+    shared_dir = RUNTIME_BASE / _sanitize_runtime_key(derived_key)
+    legacy_dir = (RUNTIME_BASE / legacy_key) if legacy_key else None
+    if legacy_dir and legacy_dir.exists() and not shared_dir.exists():
+        return legacy_dir
+    return shared_dir
+
+
+def _ensure_env_file(repo_dir: Path) -> None:
+    env_path = repo_dir / ".env"
+    if env_path.exists():
+        return
+    candidates = [
+        repo_dir / ".env.local",
+        repo_dir / ".env.local.example",
+        repo_dir / ".env.example",
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            env_path.write_text(candidate.read_text())
+            logger.info("Created .env from template", src=str(candidate), dest=str(env_path))
+            return
+
+
+def _parse_command(command: Optional[Union[str, List[str]]]) -> List[str]:
+    if not command:
+        return []
+    if isinstance(command, (list, tuple)):
+        return [str(part) for part in command if str(part).strip()]
+    return shlex.split(str(command))
+
+
+def _venv_python(repo_dir: Path) -> Optional[str]:
+    if os.name == "nt":
+        candidate = repo_dir / ".venv" / "Scripts" / "python.exe"
+    else:
+        candidate = repo_dir / ".venv" / "bin" / "python"
+    if candidate.exists():
+        return str(candidate)
+    return None
+
+
+def _prefer_venv_python(cmd: List[str], repo_dir: Path) -> List[str]:
+    if not cmd:
+        return cmd
+    venv_py = _venv_python(repo_dir)
+    if not venv_py:
+        return cmd
+    if "python" in Path(cmd[0]).name.lower():
+        return [venv_py, *cmd[1:]]
+    return cmd
+
+
+def _select_python_bin(service: PluginServiceRuntimeDTO) -> str:
+    for candidate in (
+        getattr(service, "start_command", None),
+        getattr(service, "install_command", None),
+        getattr(service, "stop_command", None),
+        getattr(service, "restart_command", None),
+    ):
+        parsed = _parse_command(candidate)
+        if parsed:
+            return parsed[0]
+    return DEFAULT_PYTHON_BIN
+
+
+def _resolve_env_inherit(service: PluginServiceRuntimeDTO) -> str:
+    inherit = getattr(service, "env_inherit", None) or os.environ.get("BRAINDRIVE_SERVICE_ENV_INHERIT")
+    inherit = (inherit or DEFAULT_ENV_INHERIT).strip().lower()
+    return ENV_INHERIT_ALL if inherit == ENV_INHERIT_ALL else DEFAULT_ENV_INHERIT
+
+
+def _build_service_env(service: PluginServiceRuntimeDTO) -> Dict[str, str]:
+    overrides = getattr(service, "env_overrides", None)
+    if not isinstance(overrides, dict):
+        return {}
+    return {str(k): "" if v is None else str(v) for k, v in overrides.items()}
+
+
+def _merge_env(overrides: Optional[Dict[str, str]], inherit: str) -> Dict[str, str]:
+    if inherit == ENV_INHERIT_ALL:
+        base = dict(os.environ)
+    else:
+        base = {key: value for key, value in os.environ.items() if key.upper() in MINIMAL_ENV_KEYS_UPPER}
+    if overrides:
+        base.update({str(k): "" if v is None else str(v) for k, v in overrides.items()})
+    return base
+
+
+def _resolve_venv_command(service: PluginServiceRuntimeDTO, action: str, repo_dir: Path) -> List[str]:
+    attr_map = {
+        "install": "install_command",
+        "start": "start_command",
+        "stop": "stop_command",
+        "restart": "restart_command",
+    }
+    explicit = getattr(service, attr_map.get(action, ""), None)
+    parsed = _parse_command(explicit)
+    if parsed:
+        return _prefer_venv_python(parsed, repo_dir)
+
+    script_name = {
+        "install": "install_with_venv.py",
+        "start": "start_with_venv.py",
+        "stop": "shutdown_with_venv.py",
+        "restart": "restart_with_venv.py",
+    }.get(action)
+    if not script_name:
+        return []
+    script_rel = Path("service_scripts") / script_name
+    if not (repo_dir / script_rel).exists():
+        return []
+    python_bin = _venv_python(repo_dir) or _select_python_bin(service)
+    return [python_bin, str(script_rel)]
 
 def ensure_service_dto(
     service_data: Union[Dict, PluginServiceRuntimeDTO], 
@@ -148,7 +287,7 @@ async def install_and_run_required_services(
                 service_type = service_dto.type
                 required_vars = service_dto.required_env_vars
                 
-                target_dir = base_services_dir / f"{plugin_slug}_{name}"
+                target_dir = _resolve_runtime_dir(service_dto, plugin_slug)
                 
                 # Download and extract repository
                 if target_dir.exists():
@@ -276,9 +415,9 @@ async def install_plugin_service(service_data: PluginServiceRuntimeDTO, plugin_s
     Installs a single plugin service, including downloading the source
     and starting the service. This function is for first-time installation.
     """
-    base_services_dir = Path("services_runtime")
+    base_services_dir = RUNTIME_BASE
     base_services_dir.mkdir(parents=True, exist_ok=True)
-    target_dir = base_services_dir / f"{plugin_slug}_{service_data.name}"
+    target_dir = _resolve_runtime_dir(service_data, plugin_slug)
     
     if target_dir.exists():
         logger.info("Service directory already exists, skipping installation", path=str(target_dir))
@@ -308,6 +447,8 @@ async def install_plugin_service(service_data: PluginServiceRuntimeDTO, plugin_s
     
     if service_type == 'python':
         await install_python_service(service_data, target_dir)
+    elif service_type == 'venv_process':
+        await _start_venv_service(service_data)
     elif service_type == 'docker-compose':
         await build_and_start_docker_service(service_data, target_dir, dotenv_values(Path(os.getcwd()) / ".env"), required_vars)
     else:
@@ -322,7 +463,7 @@ async def start_plugin_services(services_runtime: List[PluginServiceRuntimeDTO],
     logger.info("Starting required plugin services")
     
     for service_data in services_runtime:
-        target_dir = Path("services_runtime") / f"{plugin_slug}_{service_data.name}"
+        target_dir = _resolve_runtime_dir(service_data, plugin_slug)
         service_type = service_data.type or "docker-compose"
         
         try:
@@ -355,7 +496,7 @@ async def stop_plugin_services(services_runtime: List[PluginServiceRuntimeDTO], 
     """
     logger.info("Stopping required plugin services")
     for service_data in services_runtime:
-        target_dir = Path("services_runtime") / f"{plugin_slug}_{service_data.name}"
+        target_dir = _resolve_runtime_dir(service_data, plugin_slug)
         service_type = service_data.type or "docker-compose"
         
         try:
@@ -407,7 +548,7 @@ async def restart_plugin_services(plugin_slug: str, definition_id: str, user_id:
             if service_name and service_runtime.name != service_name:
                 continue
 
-            target_dir = Path("services_runtime") / f"{service_runtime.plugin_slug}_{service_runtime.name}"
+            target_dir = _resolve_runtime_dir(service_runtime, plugin_slug)
             service_type = service_runtime.type or "docker-compose"
 
             try:
@@ -457,7 +598,7 @@ async def start_plugin_services_from_db(plugin_slug: str, definition_id: str, us
             if service_name and service_runtime.name != service_name:
                 continue
 
-            target_dir = Path("services_runtime") / f"{service_runtime.plugin_slug}_{service_runtime.name}"
+            target_dir = _resolve_runtime_dir(service_runtime, plugin_slug)
             service_type = service_runtime.type or "docker-compose"
 
             try:
@@ -506,7 +647,7 @@ async def stop_plugin_services_from_db(plugin_slug: str, definition_id: str, use
             if service_name and service_runtime.name != service_name:
                 continue
 
-            target_dir = Path("services_runtime") / f"{service_runtime.plugin_slug}_{service_runtime.name}"
+            target_dir = _resolve_runtime_dir(service_runtime, plugin_slug)
             service_type = service_runtime.type or "docker-compose"
 
             try:
@@ -525,15 +666,6 @@ async def stop_plugin_services_from_db(plugin_slug: str, definition_id: str, use
                 results[service_runtime.name] = f"failed: {str(e)}"
 
         return results
-
-
-def _resolve_venv_meta(service_name: str) -> Optional[Dict]:
-    key = service_name
-    if key in VENV_SERVICE_MAP:
-        return VENV_SERVICE_MAP[key]
-    # common alternate names
-    alt = service_name.replace("_service", "")
-    return VENV_SERVICE_MAP.get(alt)
 
 
 def _truncate_output(text: str, limit: int = 1200) -> str:
@@ -556,6 +688,7 @@ async def _run_subprocess(
     cwd: Path,
     timeout: int = 120,
     env: Optional[Dict[str, str]] = None,
+    env_inherit: str = DEFAULT_ENV_INHERIT,
     wait: bool = True,
 ) -> None:
     """
@@ -563,7 +696,7 @@ async def _run_subprocess(
     When wait=False the process is started in the background with output redirected to the log file.
     """
     log_file = cwd / "service_runtime.log"
-    merged_env = {**os.environ, **(env or {})}
+    merged_env = _merge_env(env, env_inherit)
 
     if not wait:
         # Fire-and-forget with output redirected to the log file.
@@ -625,13 +758,11 @@ async def _run_subprocess(
 
 
 async def _start_venv_service(service: PluginServiceRuntimeDTO) -> None:
-    meta = _resolve_venv_meta(service.name)
-    if not meta:
-        logger.warning("Unknown venv service; skipping start", name=service.name)
-        return
-    await _ensure_venv_repo(meta, service)
+    repo_dir = _resolve_runtime_dir(service, getattr(service, "plugin_slug", None))
+    await _ensure_venv_repo(repo_dir, service)
+    _ensure_env_file(repo_dir)
 
-    health_url = service.healthcheck_url or meta.get("health")
+    health_url = service.healthcheck_url
     if health_url:
         try:
             if await wait_for_service_health(health_url, timeout=3):
@@ -641,73 +772,96 @@ async def _start_venv_service(service: PluginServiceRuntimeDTO) -> None:
             # proceed to start
             pass
 
-    repo = meta["repo"]
-    # optional install step if install_command provided
-    install_cmd = meta.get("install_cmd")
+    install_cmd = _resolve_venv_command(service, "install", repo_dir)
     if install_cmd:
-        venv_dir = repo / ".venv"
+        venv_dir = repo_dir / ".venv"
         if not venv_dir.exists():
             logger.info("Venv missing; running install command", name=service.name)
-            await _run_subprocess(install_cmd, cwd=repo, timeout=300)
+            await _run_subprocess(
+                install_cmd,
+                cwd=repo_dir,
+                timeout=300,
+                env=_build_service_env(service),
+                env_inherit=_resolve_env_inherit(service),
+            )
 
-    start_cmd = meta["start_cmd"]
+    start_cmd = _resolve_venv_command(service, "start", repo_dir)
+    if not start_cmd:
+        logger.warning("No start command available for venv service", name=service.name)
+        return
     logger.info("Starting venv service", name=service.name, cmd=" ".join(start_cmd))
-    await _run_subprocess(start_cmd, cwd=repo, timeout=180, env=_service_env(service), wait=False)
+    await _run_subprocess(
+        start_cmd,
+        cwd=repo_dir,
+        timeout=180,
+        env=_build_service_env(service),
+        env_inherit=_resolve_env_inherit(service),
+        wait=False,
+    )
 
 
 async def _stop_venv_service(service: PluginServiceRuntimeDTO) -> None:
-    meta = _resolve_venv_meta(service.name)
-    if not meta:
-        logger.warning("Unknown venv service; skipping stop", name=service.name)
+    repo_dir = _resolve_runtime_dir(service, getattr(service, "plugin_slug", None))
+    if not repo_dir.exists():
+        logger.warning("Venv service repo missing; skipping stop", name=service.name, path=str(repo_dir))
         return
-    await _ensure_venv_repo(meta, service)
-    stop_cmd = meta.get("stop_cmd")
+    stop_cmd = _resolve_venv_command(service, "stop", repo_dir)
     if not stop_cmd:
         logger.warning("No stop command for venv service", name=service.name)
         return
-    repo = meta["repo"]
     logger.info("Stopping venv service", name=service.name, cmd=" ".join(stop_cmd))
     try:
-        await _run_subprocess(stop_cmd, cwd=repo, timeout=60, env=_service_env(service))
+        await _run_subprocess(
+            stop_cmd,
+            cwd=repo_dir,
+            timeout=60,
+            env=_build_service_env(service),
+            env_inherit=_resolve_env_inherit(service),
+        )
     except Exception as e:
         logger.warning("Stop command failed", name=service.name, error=str(e))
 
 
 async def _restart_venv_service(service: PluginServiceRuntimeDTO) -> None:
-    meta = _resolve_venv_meta(service.name)
-    if not meta:
-        logger.warning("Unknown venv service; skipping restart", name=service.name)
+    repo_dir = _resolve_runtime_dir(service, getattr(service, "plugin_slug", None))
+    if not repo_dir.exists():
+        logger.info("Venv service repo missing; starting fresh", name=service.name, path=str(repo_dir))
+        await _start_venv_service(service)
         return
-    await _ensure_venv_repo(meta, service)
-    restart_cmd = meta.get("restart_cmd")
-    repo = meta["repo"]
+    restart_cmd = _resolve_venv_command(service, "restart", repo_dir)
     if restart_cmd:
         logger.info("Restarting venv service", name=service.name, cmd=" ".join(restart_cmd))
-        await _run_subprocess(restart_cmd, cwd=repo, timeout=180, env=_service_env(service), wait=False)
+        await _run_subprocess(
+            restart_cmd,
+            cwd=repo_dir,
+            timeout=180,
+            env=_build_service_env(service),
+            env_inherit=_resolve_env_inherit(service),
+            wait=False,
+        )
         return
     # fallback: stop then start
     await _stop_venv_service(service)
     await _start_venv_service(service)
 
 
-async def _ensure_venv_repo(meta: Dict, service: PluginServiceRuntimeDTO) -> None:
-  repo = meta["repo"]
-  if repo.exists():
-    return
-  repo.parent.mkdir(parents=True, exist_ok=True)
-  repo_url = service.source_url or meta.get("repo_url")
-  if not repo_url:
-    logger.warning("No repo_url provided for venv service", name=service.name)
-    return
-  logger.info("Cloning venv service repo", name=service.name, url=repo_url, dest=str(repo))
-  proc = await asyncio.create_subprocess_exec(
-    "git",
-    "clone",
-    repo_url,
-    str(repo),
-    stdout=asyncio.subprocess.PIPE,
-    stderr=asyncio.subprocess.PIPE,
-  )
-  stdout, stderr = await proc.communicate()
-  if proc.returncode != 0:
-    raise RuntimeError(f"Failed to clone {repo_url}: {stderr.decode()}")
+async def _ensure_venv_repo(repo_dir: Path, service: PluginServiceRuntimeDTO) -> None:
+    if repo_dir.exists():
+        return
+    repo_dir.parent.mkdir(parents=True, exist_ok=True)
+    repo_url = service.source_url
+    if not repo_url:
+        logger.warning("No repo_url provided for venv service", name=service.name)
+        return
+    logger.info("Cloning venv service repo", name=service.name, url=repo_url, dest=str(repo_dir))
+    proc = await asyncio.create_subprocess_exec(
+        "git",
+        "clone",
+        repo_url,
+        str(repo_dir),
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout, stderr = await proc.communicate()
+    if proc.returncode != 0:
+        raise RuntimeError(f"Failed to clone {repo_url}: {stderr.decode()}")

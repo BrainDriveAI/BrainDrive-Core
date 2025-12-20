@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from typing import List, Optional, Union
+from typing import List, Optional, Union, Dict, Any
 from datetime import datetime
 import uuid
 
@@ -18,9 +18,14 @@ class PluginServiceRuntimeDTO(BaseModel):
     type: Optional[str] = None
     install_command: Optional[str] = None
     start_command: Optional[str] = None
+    stop_command: Optional[str] = None
+    restart_command: Optional[str] = None
     healthcheck_url: Optional[str] = None
     definition_id: Optional[str] = None
     required_env_vars: List[str] = []
+    runtime_dir_key: Optional[str] = None
+    env_inherit: Optional[str] = None
+    env_overrides: Optional[Dict[str, Any]] = None
     status: Optional[str] = None
     user_id: str
     created_at: Optional[datetime] = None
@@ -42,9 +47,14 @@ class PluginServiceRuntimeDTO(BaseModel):
             type=service_dict.get('type', 'python'),
             install_command=service_dict.get('install_command'),
             start_command=service_dict.get('start_command'),
+            stop_command=service_dict.get('stop_command'),
+            restart_command=service_dict.get('restart_command'),
             healthcheck_url=service_dict.get('healthcheck_url'),
             definition_id=service_dict.get('definition_id'),
             required_env_vars=service_dict.get('required_env_vars', []),
+            runtime_dir_key=service_dict.get('runtime_dir_key'),
+            env_inherit=service_dict.get('env_inherit'),
+            env_overrides=service_dict.get('env_overrides'),
             status='installing',
             created_at=datetime.now(),
             updated_at=datetime.now()
@@ -64,4 +74,3 @@ class PluginServiceRuntimeDTO(BaseModel):
             return cls.from_github_data(data, plugin_id, plugin_slug, user_id)
         else:
             raise TypeError(f"Expected dict or {cls.__name__}, got {type(data)}")
-
