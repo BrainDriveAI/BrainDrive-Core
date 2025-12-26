@@ -13,7 +13,9 @@ Use --yes to skip the confirmation prompt.
 
 import argparse
 import asyncio
+import os
 import shutil
+import stat
 import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Set
@@ -24,7 +26,47 @@ from sqlalchemy import text
 BACKEND_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(BACKEND_ROOT))
 
+
+def _normalize_sqlite_url(url: str) -> Optional[str]:
+    prefix = "sqlite:///"
+    if not url.startswith(prefix):
+        return None
+    raw_path = url[len(prefix):].strip()
+    if not raw_path:
+        return None
+    path = Path(raw_path)
+    if path.is_absolute():
+        return None
+    candidate = (BACKEND_ROOT / raw_path).resolve()
+    if candidate.exists():
+        return f"{prefix}{candidate.as_posix()}"
+    return None
+
+
+def _bootstrap_env() -> None:
+    if os.environ.get("USE_JSON_STORAGE", "").lower() in {"1", "true", "yes", "on"}:
+        if not os.environ.get("JSON_DB_PATH"):
+            candidate = BACKEND_ROOT / "storage" / "database.json"
+            if candidate.exists():
+                os.environ["JSON_DB_PATH"] = str(candidate)
+        return
+
+    db_url = os.environ.get("DATABASE_URL", "").strip()
+    normalized = _normalize_sqlite_url(db_url) if db_url else None
+    if normalized:
+        os.environ["DATABASE_URL"] = normalized
+        return
+
+    if not db_url:
+        candidate = BACKEND_ROOT / "braindrive.db"
+        if candidate.exists():
+            os.environ["DATABASE_URL"] = f"sqlite:///{candidate.as_posix()}"
+
+
+_bootstrap_env()
+
 from app.core.database import get_db  # type: ignore
+from app.models.user import User  # type: ignore
 from app.plugins.repository import PluginRepository  # type: ignore
 from app.plugins.service_installler.plugin_service_manager import (  # type: ignore
     stop_plugin_services,
@@ -73,6 +115,13 @@ def remove_service_repos(
     removed: Dict[str, Dict[str, str]] = {}
     seen: Set[Path] = set()
 
+    def _on_rm_error(func, path, exc_info) -> None:
+        try:
+            os.chmod(path, stat.S_IWRITE)
+            func(path)
+        except Exception:
+            raise
+
     for svc in service_runtimes:
         if service_name and svc.name != service_name:
             continue
@@ -82,7 +131,7 @@ def remove_service_repos(
         seen.add(repo_dir)
         if repo_dir.exists():
             try:
-                shutil.rmtree(repo_dir)
+                shutil.rmtree(repo_dir, onerror=_on_rm_error)
                 removed[str(repo_dir)] = {"removed": "true"}
             except Exception as exc:  # pragma: no cover - defensive
                 removed[str(repo_dir)] = {"removed": "false", "error": str(exc)}
@@ -163,7 +212,8 @@ async def wipe_db(user_id: str, plugin_slug: str, plugin_id: str, definition_ids
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Reset plugin state (services + DB + shared files).")
-    parser.add_argument("--user-id", required=True, help="User ID the plugin was installed for.")
+    parser.add_argument("--user-id", help="User ID the plugin was installed for.")
+    parser.add_argument("--user-email", help="User email for lookup when user ID is unknown.")
     parser.add_argument("--plugin-slug", default=DEFAULT_PLUGIN_SLUG, help="Plugin slug to reset.")
     parser.add_argument("--plugin-version", default=None, help="Override plugin version for shared files cleanup.")
     parser.add_argument("--service-name", default=None, help="Optional single service name to target.")
@@ -174,9 +224,28 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+async def resolve_user_id(user_id: Optional[str], user_email: Optional[str]) -> str:
+    if user_id:
+        return user_id
+    if not user_email:
+        raise RuntimeError("Provide --user-id or --user-email.")
+    async for db in get_db():
+        user = await User.get_by_email(db, user_email)
+        if user:
+            if isinstance(user, dict):
+                resolved = user.get("id") or user.get("user_id")
+            else:
+                resolved = getattr(user, "id", None)
+            if resolved:
+                return str(resolved)
+        break
+    raise RuntimeError(f"No user found with email: {user_email}")
+
+
 async def run(args: argparse.Namespace) -> int:
-    context = await fetch_plugin_context(args.user_id, args.plugin_slug)
-    plugin_id = context.get("plugin_id") or f"{args.user_id}_{args.plugin_slug}"
+    user_id = await resolve_user_id(args.user_id, args.user_email)
+    context = await fetch_plugin_context(user_id, args.plugin_slug)
+    plugin_id = context.get("plugin_id") or f"{user_id}_{args.plugin_slug}"
     plugin_version = args.plugin_version or context.get("plugin_version")
     service_runtimes = context.get("service_runtimes") or []
     definition_ids = context.get("definition_ids") or []
@@ -197,7 +266,7 @@ async def run(args: argparse.Namespace) -> int:
     print("Shared plugin cleanup:", shared_result)
 
     if not args.skip_db:
-        db_result = await wipe_db(args.user_id, args.plugin_slug, plugin_id, definition_ids)
+        db_result = await wipe_db(user_id, args.plugin_slug, plugin_id, definition_ids)
         print("DB cleanup:", db_result)
     else:
         print("Skipping DB cleanup (--skip-db).")
@@ -208,10 +277,14 @@ async def run(args: argparse.Namespace) -> int:
 
 def main() -> int:
     args = parse_args()
+    if not args.user_id and not args.user_email:
+        print("Error: provide --user-id or --user-email.")
+        return 2
+    user_label = args.user_id or args.user_email
     if not args.yes:
         prompt = (
             f"This will stop services, remove cloned repos, and delete DB rows for {args.plugin_slug} "
-            f"for user '{args.user_id}'. Proceed? [y/N]: "
+            f"for user '{user_label}'. Proceed? [y/N]: "
         )
         if input(prompt).strip().lower() != "y":
             print("Aborted.")
