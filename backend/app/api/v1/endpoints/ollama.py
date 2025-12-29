@@ -10,7 +10,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.job_manager_provider import get_job_manager
-from app.core.security import get_current_user
+from app.core.auth_deps import require_user
+from app.core.auth_context import AuthContext
 from app.models.job import Job, JobStatus
 from app.models.settings import SettingDefinition, SettingScope
 from app.models.user import User
@@ -91,10 +92,10 @@ def _serialize_install_event(job: Job, event) -> Dict[str, Any]:
     return payload
 
 
-def _ensure_install_job(job: Optional[Job], user: User) -> Job:
+def _ensure_install_job(job: Optional[Job], auth: AuthContext) -> Job:
     if not job or job.job_type != INSTALL_JOB_TYPE:
         raise HTTPException(status_code=404, detail="Task not found")
-    if job.user_id != str(user.id):
+    if job.user_id != str(auth.user_id):
         raise HTTPException(status_code=404, detail="Task not found")
     return job
 async def ensure_ollama_settings_definition(db: AsyncSession):
@@ -496,7 +497,7 @@ async def check_model_exists(client: httpx.AsyncClient, server_base: str, model_
 @router.post("/install")
 async def install_ollama_model(
     request: ModelInstallRequest,
-    current_user: User = Depends(get_current_user),
+    auth: AuthContext = Depends(require_user),
     job_manager: JobManager = Depends(get_job_manager),
 ):
     """Enqueue a model installation using the background job system."""
@@ -516,7 +517,7 @@ async def install_ollama_model(
         job, created = await job_manager.enqueue_job(
             job_type=INSTALL_JOB_TYPE,
             payload=payload,
-            user_id=str(current_user.id),
+            user_id=str(auth.user_id),
             idempotency_key=idempotency_key,
         )
     except ValueError as exc:
@@ -530,22 +531,22 @@ async def install_ollama_model(
 @router.get("/install/{task_id}")
 async def get_install_status(
     task_id: str,
-    current_user: User = Depends(get_current_user),
+    auth: AuthContext = Depends(require_user),
     job_manager: JobManager = Depends(get_job_manager),
 ):
     job = await job_manager.get_job(task_id)
-    job = _ensure_install_job(job, current_user)
+    job = _ensure_install_job(job, auth)
     return _serialize_install_job(job)
 
 
 @router.get("/install/{task_id}/events")
 async def stream_install_events(
     task_id: str,
-    current_user: User = Depends(get_current_user),
+    auth: AuthContext = Depends(require_user),
     job_manager: JobManager = Depends(get_job_manager),
 ):
     job = await job_manager.get_job(task_id)
-    job = _ensure_install_job(job, current_user)
+    job = _ensure_install_job(job, auth)
 
     async def event_generator() -> AsyncGenerator[bytes, None]:
         last_sequence: Optional[int] = None
@@ -555,7 +556,7 @@ async def stream_install_events(
             events = await job_manager.get_progress_events(task_id, since=last_sequence)
             if events:
                 job_snapshot = await job_manager.get_job(task_id)
-                if not job_snapshot or job_snapshot.user_id != str(current_user.id) or job_snapshot.job_type != INSTALL_JOB_TYPE:
+                if not job_snapshot or job_snapshot.user_id != str(auth.user_id) or job_snapshot.job_type != INSTALL_JOB_TYPE:
                     break
                 for event in events:
                     last_sequence = event.sequence_number
@@ -563,7 +564,7 @@ async def stream_install_events(
                     yield f"data: {json.dumps(payload)}\n\n".encode()
 
             job_snapshot = await job_manager.get_job(task_id)
-            if not job_snapshot or job_snapshot.user_id != str(current_user.id) or job_snapshot.job_type != INSTALL_JOB_TYPE:
+            if not job_snapshot or job_snapshot.user_id != str(auth.user_id) or job_snapshot.job_type != INSTALL_JOB_TYPE:
                 break
             if job_snapshot.status in TERMINAL_JOB_STATUSES:
                 yield f"data: {json.dumps(_serialize_install_job(job_snapshot))}\n\n".encode()
@@ -580,11 +581,11 @@ async def stream_install_events(
 @router.delete("/install/{task_id}")
 async def cancel_install(
     task_id: str,
-    current_user: User = Depends(get_current_user),
+    auth: AuthContext = Depends(require_user),
     job_manager: JobManager = Depends(get_job_manager),
 ):
     job = await job_manager.get_job(task_id)
-    job = _ensure_install_job(job, current_user)
+    job = _ensure_install_job(job, auth)
     canceled = await job_manager.cancel_job(task_id)
     if not canceled:
         latest = await job_manager.get_job(task_id)

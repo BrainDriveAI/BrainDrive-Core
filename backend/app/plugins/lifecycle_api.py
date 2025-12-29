@@ -418,7 +418,8 @@ remote_installer = RemotePluginInstaller()
 
 # Import actual dependencies from BrainDrive
 from app.core.database import get_db
-from app.core.security import get_current_user
+from app.core.auth_deps import require_user
+from app.core.auth_context import AuthContext
 from app.models.user import User
 from app.plugins.service_installler.plugin_service_manager import restart_plugin_services
 
@@ -428,7 +429,7 @@ async def restart_plugin_service(
     plugin_slug: str,
     background_tasks: BackgroundTasks,
     payload: dict = Body(...),
-    current_user: User = Depends(get_current_user),
+    auth: AuthContext = Depends(require_user),
 ):
     """
     Restart one or all plugin services using DB-stored environment variables.
@@ -441,14 +442,14 @@ async def restart_plugin_service(
     # If user_id is specified, ensure it matches the current user's ID (if authenticated)
     if user_id:
         if user_id == "current":
-            if not current_user:
+            if not auth:
                 logger.warning("User ID 'current' specified but no current user available")
                 # Return empty list if no current user is available
                 return []
-            user_id = str(current_user.id)
+            user_id = str(auth.user_id)
             logger.info(f"Using current user ID: {user_id}")
-        elif current_user:
-            if str(current_user.id) != str(user_id):
+        elif auth:
+            if str(auth.user_id) != str(user_id):
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail="Cannot access settings for another user"
@@ -472,14 +473,14 @@ async def restart_plugin_service(
 @router.post("/{plugin_slug}/install")
 async def install_plugin(
     plugin_slug: str,
-    current_user = Depends(get_current_user),
+    auth: AuthContext = Depends(require_user),
     db: AsyncSession = Depends(get_db)
 ):
     """Install any plugin for the current user"""
     try:
-        logger.info(f"Plugin installation requested: {plugin_slug} by user {current_user.id}")
+        logger.info(f"Plugin installation requested: {plugin_slug} by user {auth.user_id}")
 
-        result = await universal_manager.install_plugin(plugin_slug, current_user.id, db)
+        result = await universal_manager.install_plugin(plugin_slug, auth.user_id, db)
 
         if result['success']:
             return {
@@ -510,14 +511,14 @@ async def install_plugin(
 @router.delete("/{plugin_slug}/uninstall")
 async def uninstall_plugin(
     plugin_slug: str,
-    current_user = Depends(get_current_user),
+    auth: AuthContext = Depends(require_user),
     db: AsyncSession = Depends(get_db)
 ):
     """Uninstall any plugin for the current user"""
     try:
-        logger.info(f"Plugin uninstallation requested: {plugin_slug} by user {current_user.id}")
+        logger.info(f"Plugin uninstallation requested: {plugin_slug} by user {auth.user_id}")
 
-        result = await universal_manager.delete_plugin(plugin_slug, current_user.id, db)
+        result = await universal_manager.delete_plugin(plugin_slug, auth.user_id, db)
 
         if result['success']:
             return {
@@ -547,14 +548,14 @@ async def uninstall_plugin(
 @router.get("/{plugin_slug}/status")
 async def get_plugin_status(
     plugin_slug: str,
-    current_user = Depends(get_current_user),
+    auth: AuthContext = Depends(require_user),
     db: AsyncSession = Depends(get_db)
 ):
     """Get installation status of any plugin for the current user"""
     try:
-        logger.info(f"Plugin status requested: {plugin_slug} by user {current_user.id}")
+        logger.info(f"Plugin status requested: {plugin_slug} by user {auth.user_id}")
 
-        status_info = await universal_manager.get_plugin_status(plugin_slug, current_user.id, db)
+        status_info = await universal_manager.get_plugin_status(plugin_slug, auth.user_id, db)
 
         return {
             "status": "success",
@@ -594,13 +595,13 @@ async def get_available_plugins():
 
 @router.get("/updates/available")
 async def get_available_updates(
-    current_user = Depends(get_current_user)
+    auth: AuthContext = Depends(require_user)
 ):
     """Get list of available updates for installed remote plugins"""
     try:
-        logger.info(f"Available updates requested by user {current_user.id}")
+        logger.info(f"Available updates requested by user {auth.user_id}")
 
-        updates = await remote_installer.list_available_updates(current_user.id)
+        updates = await remote_installer.list_available_updates(auth.user_id)
 
         return {
             "status": "success",
@@ -620,12 +621,12 @@ async def get_available_updates(
 @router.get("/{plugin_slug}/update/available")
 async def check_plugin_update_available(
     plugin_slug: str,
-    current_user = Depends(get_current_user),
+    auth: AuthContext = Depends(require_user),
     db: AsyncSession = Depends(get_db)
 ):
     """Check if an update is available for a specific plugin"""
     try:
-        logger.info(f"Update check requested for plugin {plugin_slug} by user {current_user.id}")
+        logger.info(f"Update check requested for plugin {plugin_slug} by user {auth.user_id}")
 
         # Get plugin information from database
         from app.models.plugin import Plugin
@@ -634,7 +635,7 @@ async def check_plugin_update_available(
         # Find the plugin by slug for this user
         stmt = select(Plugin).where(
             Plugin.plugin_slug == plugin_slug,
-            Plugin.user_id == current_user.id
+            Plugin.user_id == auth.user_id
         )
         result = await db.execute(stmt)
         plugin = result.scalar_one_or_none()
@@ -804,7 +805,7 @@ async def install_plugin_unified(
     version: Optional[str] = Form("latest"),
     filename: Optional[str] = Form(None),
     file: Optional[UploadFile] = File(None),
-    current_user = Depends(get_current_user),
+    auth: AuthContext = Depends(require_user),
     db: AsyncSession = Depends(get_db)
 ):
     """
@@ -821,7 +822,7 @@ async def install_plugin_unified(
     - filename: Original filename
     """
     try:
-        logger.info(f"Unified plugin installation requested by user {current_user.id}")
+        logger.info(f"Unified plugin installation requested by user {auth.user_id}")
         logger.info(f"Method: {method}")
         
         if method == 'github':
@@ -836,7 +837,7 @@ async def install_plugin_unified(
             # Use the remote installer to install the plugin
             result = await remote_installer.install_from_url(
                 repo_url=repo_url,
-                user_id=current_user.id,
+                user_id=auth.user_id,
                 version=version or "latest"
             )
             
@@ -919,7 +920,7 @@ async def install_plugin_unified(
                 # Use the remote installer to install from file
                 result = await remote_installer.install_from_file(
                     file_path=temp_file_path,
-                    user_id=current_user.id,
+                    user_id=auth.user_id,
                     filename=filename
                 )
                 
@@ -980,7 +981,7 @@ async def install_plugin_unified(
 @router.post("/install-from-url")
 async def install_plugin_from_repository(
     request: RemoteInstallRequest,
-    current_user = Depends(get_current_user),
+    auth: AuthContext = Depends(require_user),
     db: AsyncSession = Depends(get_db)
 ):
     """
@@ -990,19 +991,19 @@ async def install_plugin_from_repository(
     validates it, and installs it for the current user only.
     """
     try:
-        logger.info(f"Remote plugin installation requested by user {current_user.id}")
+        logger.info(f"Remote plugin installation requested by user {auth.user_id}")
         logger.info(f"Repository: {request.repo_url}, Version: {request.version}")
 
         result = await remote_installer.install_from_url(
             request.repo_url,
-            current_user.id,
+            auth.user_id,
             request.version
         )
 
         logger.info(f"Remote installer result: {result}")
 
         if result['success']:
-            logger.info(f"Plugin installation successful for user {current_user.id}")
+            logger.info(f"Plugin installation successful for user {auth.user_id}")
 
             # Get plugin name for display, fallback to slug if name not available
             plugin_name = result.get('plugin_name') or result.get('plugin_slug') or 'Unknown Plugin'
@@ -1026,7 +1027,7 @@ async def install_plugin_from_repository(
             error_details = result.get('details', {})
             error_message = result.get('error', 'Unknown installation error')
 
-            logger.error(f"Plugin installation failed for user {current_user.id}: {error_message}")
+            logger.error(f"Plugin installation failed for user {auth.user_id}: {error_message}")
             logger.error(f"Error details: {error_details}")
 
             # Create detailed error response
@@ -1035,7 +1036,7 @@ async def install_plugin_from_repository(
                 "step": error_details.get('step', 'unknown'),
                 "repo_url": request.repo_url,
                 "version": request.version,
-                "user_id": current_user.id
+                "user_id": auth.user_id
             }
 
             # Add step-specific details
@@ -1069,7 +1070,7 @@ async def install_plugin_from_repository(
                     "step": "api_endpoint_exception",
                     "repo_url": request.repo_url,
                     "version": request.version,
-                    "user_id": current_user.id
+                    "user_id": auth.user_id
                 },
                 "suggestions": [
                     "Check the server logs for detailed error information",
@@ -1083,12 +1084,12 @@ async def install_plugin_from_repository(
 @router.post("/{plugin_slug}/update")
 async def update_plugin(
     plugin_slug: str,
-    current_user = Depends(get_current_user),
+    auth: AuthContext = Depends(require_user),
     db: AsyncSession = Depends(get_db)
 ):
     """Update a plugin to the latest version"""
     try:
-        logger.info(f"Plugin update requested: {plugin_slug} by user {current_user.id}")
+        logger.info(f"Plugin update requested: {plugin_slug} by user {auth.user_id}")
 
         # Get plugin information from database to check if it has a source URL
         from app.models.plugin import Plugin
@@ -1097,7 +1098,7 @@ async def update_plugin(
         # Find the plugin by slug for this user
         stmt = select(Plugin).where(
             Plugin.plugin_slug == plugin_slug,
-            Plugin.user_id == current_user.id
+            Plugin.user_id == auth.user_id
         )
         result = await db.execute(stmt)
         plugin = result.scalar_one_or_none()
@@ -1115,8 +1116,8 @@ async def update_plugin(
             )
 
         # Use remote installer to update the plugin
-        logger.info(f"Calling update_plugin with user_id={current_user.id}, plugin_id={plugin.id}")
-        result = await remote_installer.update_plugin(current_user.id, plugin.id)
+        logger.info(f"Calling update_plugin with user_id={auth.user_id}, plugin_id={plugin.id}")
+        result = await remote_installer.update_plugin(auth.user_id, plugin.id)
         logger.info(f"Update result: {result}")
 
         if result['success']:

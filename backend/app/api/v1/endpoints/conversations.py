@@ -8,7 +8,8 @@ from typing import List, Optional
 from uuid import UUID
 
 from app.core.database import get_db
-from app.core.security import get_current_user
+from app.core.auth_deps import require_user
+from app.core.auth_context import AuthContext
 from app.models.conversation import Conversation
 from app.models.message import Message
 from app.schemas.conversation_schemas import (
@@ -34,12 +35,12 @@ async def get_user_conversations(
     page_id: Optional[str] = Query(None, description="Filter by page ID"),
     persona_id: Optional[str] = Query(None, description="Filter by persona ID"),
     db: AsyncSession = Depends(get_db),
-    current_user = Depends(get_current_user)
+    auth: AuthContext = Depends(require_user)
 ):
     """Get all conversations for a specific user."""
     # Format user_id to ensure consistency (remove dashes if present)
     formatted_user_id = user_id.replace('-', '')
-    current_user_id = str(current_user.id).replace('-', '')
+    current_user_id = str(auth.user_id).replace('-', '')
     
     # Ensure the current user can only access their own conversations
     if current_user_id != formatted_user_id:
@@ -92,12 +93,12 @@ async def get_user_conversations(
 async def create_conversation(
     conversation: ConversationCreate,
     db: AsyncSession = Depends(get_db),
-    current_user = Depends(get_current_user)
+    auth: AuthContext = Depends(require_user)
 ):
     """Create a new conversation."""
     # Ensure the current user can only create conversations for themselves
     # Format user IDs to ensure consistency (remove dashes if present)
-    current_user_id = str(current_user.id).replace('-', '')
+    current_user_id = str(auth.user_id).replace('-', '')
     conversation_user_id = str(conversation.user_id).replace('-', '')
     
     if current_user_id != conversation_user_id:
@@ -124,7 +125,7 @@ async def create_conversation(
 async def get_conversation(
     conversation_id: str,
     db: AsyncSession = Depends(get_db),
-    current_user = Depends(get_current_user)
+    auth: AuthContext = Depends(require_user)
 ):
     """Get a specific conversation."""
     conversation = await Conversation.get_by_id(db, conversation_id)
@@ -134,7 +135,7 @@ async def get_conversation(
     # Ensure the current user can only access their own conversations
     # Format user IDs to ensure consistency (remove dashes if present)
     conversation_user_id = str(conversation.user_id).replace('-', '')
-    current_user_id = str(current_user.id).replace('-', '')
+    current_user_id = str(auth.user_id).replace('-', '')
     
     if conversation_user_id != current_user_id:
         raise HTTPException(status_code=403, detail="Not authorized to access this conversation")
@@ -154,7 +155,7 @@ async def update_conversation(
     conversation_id: str,
     conversation_update: ConversationUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user = Depends(get_current_user)
+    auth: AuthContext = Depends(require_user)
 ):
     """Update a conversation's metadata."""
     conversation = await Conversation.get_by_id(db, conversation_id)
@@ -164,7 +165,7 @@ async def update_conversation(
     # Ensure the current user can only update their own conversations
     # Format user IDs to ensure consistency (remove dashes if present)
     conversation_user_id = str(conversation.user_id).replace('-', '')
-    current_user_id = str(current_user.id).replace('-', '')
+    current_user_id = str(auth.user_id).replace('-', '')
     
     if conversation_user_id != current_user_id:
         raise HTTPException(status_code=403, detail="Not authorized to update this conversation")
@@ -202,7 +203,7 @@ async def update_conversation(
 async def delete_conversation(
     conversation_id: str,
     db: AsyncSession = Depends(get_db),
-    current_user = Depends(get_current_user)
+    auth: AuthContext = Depends(require_user)
 ):
     """Delete a conversation and all its messages."""
     conversation = await Conversation.get_by_id(db, conversation_id)
@@ -212,7 +213,7 @@ async def delete_conversation(
     # Ensure the current user can only delete their own conversations
     # Format user IDs to ensure consistency (remove dashes if present)
     conversation_user_id = str(conversation.user_id).replace('-', '')
-    current_user_id = str(current_user.id).replace('-', '')
+    current_user_id = str(auth.user_id).replace('-', '')
     
     if conversation_user_id != current_user_id:
         raise HTTPException(status_code=403, detail="Not authorized to delete this conversation")
@@ -228,7 +229,7 @@ async def get_conversation_messages(
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
-    current_user = Depends(get_current_user)
+    auth: AuthContext = Depends(require_user)
 ):
     """Get all messages for a specific conversation."""
     conversation = await Conversation.get_by_id(db, conversation_id)
@@ -238,7 +239,7 @@ async def get_conversation_messages(
     # Ensure the current user can only access their own conversations
     # Format user IDs to ensure consistency (remove dashes if present)
     conversation_user_id = str(conversation.user_id).replace('-', '')
-    current_user_id = str(current_user.id).replace('-', '')
+    current_user_id = str(auth.user_id).replace('-', '')
     
     if conversation_user_id != current_user_id:
         raise HTTPException(status_code=403, detail="Not authorized to access this conversation")
@@ -252,7 +253,7 @@ async def create_message(
     conversation_id: str,
     message: MessageCreate,
     db: AsyncSession = Depends(get_db),
-    current_user = Depends(get_current_user)
+    auth: AuthContext = Depends(require_user)
 ):
     """Add a new message to a conversation."""
     conversation = await Conversation.get_by_id(db, conversation_id)
@@ -262,7 +263,7 @@ async def create_message(
     # Ensure the current user can only add messages to their own conversations
     # Format user IDs to ensure consistency (remove dashes if present)
     conversation_user_id = str(conversation.user_id).replace('-', '')
-    current_user_id = str(current_user.id).replace('-', '')
+    current_user_id = str(auth.user_id).replace('-', '')
     
     if conversation_user_id != current_user_id:
         raise HTTPException(status_code=403, detail="Not authorized to add messages to this conversation")
@@ -290,7 +291,7 @@ async def get_conversation_with_messages(
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
-    current_user = Depends(get_current_user)
+    auth: AuthContext = Depends(require_user)
 ):
     """Get a conversation with all its messages."""
     conversation = await Conversation.get_by_id(db, conversation_id)
@@ -300,7 +301,7 @@ async def get_conversation_with_messages(
     # Ensure the current user can only access their own conversations
     # Format user IDs to ensure consistency (remove dashes if present)
     conversation_user_id = str(conversation.user_id).replace('-', '')
-    current_user_id = str(current_user.id).replace('-', '')
+    current_user_id = str(auth.user_id).replace('-', '')
     
     if conversation_user_id != current_user_id:
         raise HTTPException(status_code=403, detail="Not authorized to access this conversation")
@@ -322,7 +323,7 @@ async def get_conversation_with_messages(
 async def get_conversation_with_persona(
     conversation_id: str,
     db: AsyncSession = Depends(get_db),
-    current_user = Depends(get_current_user)
+    auth: AuthContext = Depends(require_user)
 ):
     """Get a conversation with full persona details."""
     from app.schemas.conversation_schemas import ConversationWithPersona
@@ -335,7 +336,7 @@ async def get_conversation_with_persona(
     
     # Ensure the current user can only access their own conversations
     conversation_user_id = str(conversation.user_id).replace('-', '')
-    current_user_id = str(current_user.id).replace('-', '')
+    current_user_id = str(auth.user_id).replace('-', '')
     
     if conversation_user_id != current_user_id:
         raise HTTPException(status_code=403, detail="Not authorized to access this conversation")
@@ -376,7 +377,7 @@ async def update_conversation_persona(
     conversation_id: str,
     request_body: dict = Body(..., description="Request body containing persona_id"),
     db: AsyncSession = Depends(get_db),
-    current_user = Depends(get_current_user)
+    auth: AuthContext = Depends(require_user)
 ):
     """Update a conversation's persona."""
     from app.models.persona import Persona
@@ -390,7 +391,7 @@ async def update_conversation_persona(
     
     # Ensure the current user can only update their own conversations
     conversation_user_id = str(conversation.user_id).replace('-', '')
-    current_user_id = str(current_user.id).replace('-', '')
+    current_user_id = str(auth.user_id).replace('-', '')
     
     if conversation_user_id != current_user_id:
         raise HTTPException(status_code=403, detail="Not authorized to update this conversation")
@@ -428,7 +429,7 @@ async def get_conversations_by_persona(
     skip: int = Query(0, ge=0),
     limit: int = Query(20, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
-    current_user = Depends(get_current_user)
+    auth: AuthContext = Depends(require_user)
 ):
     """Get all conversations for a specific persona."""
     from app.models.persona import Persona
@@ -441,7 +442,7 @@ async def get_conversations_by_persona(
     
     # Ensure the current user can only access their own persona's conversations
     persona_user_id = str(persona.user_id).replace('-', '')
-    current_user_id = str(current_user.id).replace('-', '')
+    current_user_id = str(auth.user_id).replace('-', '')
     
     if persona_user_id != current_user_id:
         raise HTTPException(status_code=403, detail="Not authorized to access this persona's conversations")

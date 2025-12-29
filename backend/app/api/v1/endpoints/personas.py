@@ -7,7 +7,8 @@ from typing import List, Optional
 import math
 
 from app.core.database import get_db
-from app.core.security import get_current_user
+from app.core.auth_deps import require_user
+from app.core.auth_context import AuthContext
 from app.services.persona_service import PersonaService
 from app.schemas.persona import (
     PersonaResponse,
@@ -27,7 +28,7 @@ async def get_personas(
     tags: Optional[str] = Query(None, description="Comma-separated list of tags to filter by"),
     is_active: Optional[bool] = Query(None, description="Filter by active status"),
     db: AsyncSession = Depends(get_db),
-    current_user = Depends(get_current_user)
+    auth: AuthContext = Depends(require_user)
 ):
     """Get paginated list of user's personas with optional filtering."""
     try:
@@ -39,7 +40,7 @@ async def get_personas(
         # Get personas from service
         personas, total_count = await PersonaService.get_user_personas(
             db=db,
-            user_id=str(current_user.id),
+            user_id=str(auth.user_id),
             skip=skip,
             limit=limit,
             search=search,
@@ -73,14 +74,14 @@ async def get_personas(
 async def create_persona(
     persona: PersonaCreate,
     db: AsyncSession = Depends(get_db),
-    current_user = Depends(get_current_user)
+    auth: AuthContext = Depends(require_user)
 ):
     """Create a new persona."""
     try:
         db_persona = await PersonaService.create_persona(
             db=db,
             persona_data=persona,
-            user_id=str(current_user.id)
+            user_id=str(auth.user_id)
         )
         
         # Parse persona for response
@@ -97,14 +98,14 @@ async def create_persona(
 async def get_persona(
     persona_id: str,
     db: AsyncSession = Depends(get_db),
-    current_user = Depends(get_current_user)
+    auth: AuthContext = Depends(require_user)
 ):
     """Get a specific persona by ID."""
     try:
         db_persona = await PersonaService.get_persona_by_id(
             db=db,
             persona_id=persona_id,
-            user_id=str(current_user.id)
+            user_id=str(auth.user_id)
         )
         
         if not db_persona:
@@ -125,14 +126,14 @@ async def update_persona(
     persona_id: str,
     persona_update: PersonaUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user = Depends(get_current_user)
+    auth: AuthContext = Depends(require_user)
 ):
     """Update a persona."""
     try:
         db_persona = await PersonaService.update_persona(
             db=db,
             persona_id=persona_id,
-            user_id=str(current_user.id),
+            user_id=str(auth.user_id),
             persona_update=persona_update
         )
         
@@ -155,14 +156,14 @@ async def update_persona(
 async def delete_persona(
     persona_id: str,
     db: AsyncSession = Depends(get_db),
-    current_user = Depends(get_current_user)
+    auth: AuthContext = Depends(require_user)
 ):
     """Delete a persona."""
     try:
         success = await PersonaService.delete_persona(
             db=db,
             persona_id=persona_id,
-            user_id=str(current_user.id)
+            user_id=str(auth.user_id)
         )
         
         if not success:
@@ -179,13 +180,13 @@ async def delete_persona(
 @router.get("/personas/tags", response_model=List[str])
 async def get_available_tags(
     db: AsyncSession = Depends(get_db),
-    current_user = Depends(get_current_user)
+    auth: AuthContext = Depends(require_user)
 ):
     """Get all unique tags used by user's personas."""
     try:
         tags = await PersonaService.get_available_tags(
             db=db,
-            user_id=str(current_user.id)
+            user_id=str(auth.user_id)
         )
         
         return tags

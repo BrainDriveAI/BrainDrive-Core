@@ -8,8 +8,8 @@ import json
 
 from app.core.config import settings
 from app.core.database import get_db
-from app.core.security import get_current_user
-from app.models.user import User
+from app.core.auth_deps import require_admin
+from app.core.auth_context import AuthContext
 from app.routers.plugins import plugin_manager
 
 router = APIRouter(tags=["diagnostics"])
@@ -70,14 +70,14 @@ async def _get_db_metadata(db: AsyncSession) -> Dict[str, Any]:
     return info
 
 
-async def _get_plugin_summary(user: User) -> Dict[str, Any]:
+async def _get_plugin_summary(user_id: str) -> Dict[str, Any]:
     """Summarize plugins/modules for the current user."""
     summary: Dict[str, Any] = {"count": 0, "modules": 0, "items": []}
     try:
         if not plugin_manager._initialized:
             await plugin_manager.initialize()
 
-        plugins = await plugin_manager.get_all_plugins_for_designer(user_id=user.id)
+        plugins = await plugin_manager.get_all_plugins_for_designer(user_id=user_id)
         for plugin_id, plugin_data in plugins.items():
             modules = plugin_data.get("modules") or []
             summary["items"].append(
@@ -120,11 +120,11 @@ def _read_log_tail(limit: int = 100) -> Dict[str, Any]:
 @router.get("/diagnostics")
 async def get_diagnostics(
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    auth: AuthContext = Depends(require_admin),
 ) -> Dict[str, Any]:
-    """Backend diagnostics surface for issue triage."""
+    """Backend diagnostics surface for issue triage (admin-only)."""
     db_info = await _get_db_metadata(db)
-    plugin_summary = await _get_plugin_summary(current_user)
+    plugin_summary = await _get_plugin_summary(auth.user_id)
     commit_hash = _get_commit_hash()
 
     return {

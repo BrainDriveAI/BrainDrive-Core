@@ -12,8 +12,9 @@ from app.core.security import (
     verify_password,
     hash_password,
     create_access_token,
-    get_current_user,
 )
+from app.core.auth_deps import require_user
+from app.core.auth_context import AuthContext
 from app.models.user import User
 from app.schemas.user import UserCreate, UserLogin, UserResponse
 import logging
@@ -902,11 +903,18 @@ async def refresh_token(
 @router.post("/logout")
 async def logout(
     response: Response,
-    current_user_data: User = Depends(get_current_user),
+    auth: AuthContext = Depends(require_user),
     db: AsyncSession = Depends(get_db),
 ):
     """Logout user and clear refresh token."""
     try:
+        # Fetch user from database
+        stmt = select(User).where(User.id == auth.user_id)
+        result = await db.execute(stmt)
+        current_user_data = result.scalar_one_or_none()
+        if not current_user_data:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+        
         # Clear refresh token in database
         current_user_data.refresh_token = None
         current_user_data.refresh_token_expires = None
@@ -935,14 +943,18 @@ async def logout(
 
 @router.get("/me", response_model=UserResponse)
 async def get_current_user_info(
-    current_user_data: User = Depends(get_current_user),
+    auth: AuthContext = Depends(require_user),
     db: AsyncSession = Depends(get_db),
 ):
     """Get current user information."""
     try:
         logger.info("Getting current user info")
 
-        # The current_user is already a User object from the dependency
+        # Fetch user from database using auth context
+        stmt = select(User).where(User.id == auth.user_id)
+        result = await db.execute(stmt)
+        current_user_data = result.scalar_one_or_none()
+        
         if not current_user_data:
             logger.error("No user found")
             raise HTTPException(
@@ -974,7 +986,7 @@ async def get_current_user_info(
 @router.put("/profile/username", response_model=UserResponse)
 async def update_username(
     request: Request,
-    current_user_data: User = Depends(get_current_user),
+    auth: AuthContext = Depends(require_user),
     db: AsyncSession = Depends(get_db),
 ):
     # Parse request body to get username
@@ -992,6 +1004,13 @@ async def update_username(
         )
     """Update the current user's username."""
     try:
+        # Fetch user from database using auth context
+        stmt = select(User).where(User.id == auth.user_id)
+        result = await db.execute(stmt)
+        current_user_data = result.scalar_one_or_none()
+        if not current_user_data:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+        
         logger.info(f"Updating username for user: {current_user_data.id}")
 
         # Check if username is already taken
@@ -1036,7 +1055,7 @@ async def update_username(
 @router.put("/profile/password")
 async def update_password(
     request: Request,
-    current_user_data: User = Depends(get_current_user),
+    auth: AuthContext = Depends(require_user),
     db: AsyncSession = Depends(get_db),
 ):
     # Parse request body to get password data
@@ -1069,6 +1088,13 @@ async def update_password(
         )
     """Update the current user's password."""
     try:
+        # Fetch user from database using auth context
+        stmt = select(User).where(User.id == auth.user_id)
+        result = await db.execute(stmt)
+        current_user_data = result.scalar_one_or_none()
+        if not current_user_data:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+        
         logger.info(f"Updating password for user: {current_user_data.id}")
 
         # Verify current password

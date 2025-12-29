@@ -12,7 +12,8 @@ from sqlalchemy import select, text
 from ..core.database import get_db
 from ..models.plugin import Plugin, Module
 from ..models.user import User
-from ..core.security import get_current_user
+from ..core.auth_deps import require_user, require_admin
+from ..core.auth_context import AuthContext
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 import structlog
@@ -37,13 +38,13 @@ async def install_plugin(
     version: str,
     source_url: str,
     background_tasks: BackgroundTasks,
-    current_user: User = Depends(get_current_user),
+    auth: AuthContext = Depends(require_user),
     db: AsyncSession = Depends(get_db)
 ):
     """Install plugin for current user"""
     try:
         result = await plugin_lifecycle_service.install_plugin(
-            user_id=current_user.id,
+            user_id=auth.user_id,
             plugin_slug=plugin_slug,
             version=version,
             source_url=source_url,
@@ -66,13 +67,13 @@ async def update_plugin(
     plugin_slug: str,
     new_version: str,
     background_tasks: BackgroundTasks,
-    current_user: User = Depends(get_current_user),
+    auth: AuthContext = Depends(require_user),
     db: AsyncSession = Depends(get_db)
 ):
     """Update plugin to new version for current user"""
     try:
         result = await plugin_lifecycle_service.update_plugin(
-            user_id=current_user.id,
+            user_id=auth.user_id,
             plugin_slug=plugin_slug,
             new_version=new_version,
             db=db
@@ -92,13 +93,13 @@ async def update_plugin(
 async def delete_plugin(
     plugin_slug: str,
     background_tasks: BackgroundTasks,
-    current_user: User = Depends(get_current_user),
+    auth: AuthContext = Depends(require_user),
     db: AsyncSession = Depends(get_db)
 ):
     """Delete plugin for current user"""
     try:
         result = await plugin_lifecycle_service.delete_plugin(
-            user_id=current_user.id,
+            user_id=auth.user_id,
             plugin_slug=plugin_slug,
             db=db
         )
@@ -116,13 +117,13 @@ async def delete_plugin(
 @router.get("/{plugin_slug}/status")
 async def get_plugin_status(
     plugin_slug: str,
-    current_user: User = Depends(get_current_user),
+    auth: AuthContext = Depends(require_user),
     db: AsyncSession = Depends(get_db)
 ):
     """Get plugin status for current user"""
     try:
         return await plugin_lifecycle_service.get_plugin_status(
-            user_id=current_user.id,
+            user_id=auth.user_id,
             plugin_slug=plugin_slug,
             db=db
         )
@@ -134,12 +135,9 @@ async def get_plugin_status(
 
 @router.get("/system/stats")
 async def get_system_stats(
-    current_user: User = Depends(get_current_user)
+    auth: AuthContext = Depends(require_admin)
 ):
     """Get system-wide plugin statistics (admin only)"""
-    if not current_user.is_admin:
-        raise HTTPException(status_code=403, detail="Admin access required")
-
     try:
         return await plugin_lifecycle_service.get_system_stats()
 
@@ -152,14 +150,14 @@ async def get_system_stats(
 async def serve_plugin_files(
     plugin_id: str,
     path: str,
-    current_user: User = Depends(get_current_user),
+    auth: AuthContext = Depends(require_user),
     db: AsyncSession = Depends(get_db)
 ):
     """Serve plugin files from shared storage for frontend access"""
     try:
         # Check if user has plugin installed (check JSON file)
         has_plugin = await plugin_lifecycle_service.storage_manager.plugin_exists_for_user(
-            current_user.id, plugin_id
+            auth.user_id, plugin_id
         )
 
         if not has_plugin:
@@ -172,7 +170,7 @@ async def serve_plugin_files(
         """)
 
         result = await db.execute(plugin_query, {
-            'user_id': current_user.id,
+            'user_id': auth.user_id,
             'plugin_slug': plugin_id
         })
 
@@ -233,14 +231,14 @@ async def serve_plugin_files(
 # Backward compatibility endpoints - these maintain the existing API structure
 # while using the new lifecycle service underneath
 
-@router.get("/plugins/manifest", dependencies=[Depends(get_current_user)])
-async def get_plugin_manifest(current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+@router.get("/plugins/manifest")
+async def get_plugin_manifest(auth: AuthContext = Depends(require_user), db: AsyncSession = Depends(get_db)):
     """Get the manifest of all available plugins for the current user (backward compatibility)"""
     try:
-        logger.info(f"Getting plugin manifest for user: {current_user.id}")
+        logger.info(f"Getting plugin manifest for user: {auth.user_id}")
 
         # Get user's installed plugins from database (primary source of truth)
-        plugins_query = select(Plugin).where(Plugin.user_id == current_user.id)
+        plugins_query = select(Plugin).where(Plugin.user_id == auth.user_id)
         result = await db.execute(plugins_query)
         user_plugins = result.scalars().all()
 
@@ -252,7 +250,7 @@ async def get_plugin_manifest(current_user: User = Depends(get_current_user), db
 
             # Check if user has plugin installed in storage system
             has_installation = await plugin_lifecycle_service.storage_manager.plugin_exists_for_user(
-                current_user.id, plugin_slug
+                auth.user_id, plugin_slug
             )
 
             if not has_installation:
@@ -303,7 +301,7 @@ async def get_plugin_manifest(current_user: User = Depends(get_current_user), db
                 "enabled": plugin.enabled,
                 "modules": module_metadata,
                 "database_id": plugin.id,
-                "user_id": current_user.id,
+                "user_id": auth.user_id,
                 "shared_path": str(shared_path)
             }
 
@@ -314,19 +312,19 @@ async def get_plugin_manifest(current_user: User = Depends(get_current_user), db
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/plugins/manifest/designer", dependencies=[Depends(get_current_user)])
-async def get_designer_plugin_manifest(current_user: User = Depends(get_current_user)):
+@router.get("/plugins/manifest/designer")
+async def get_designer_plugin_manifest(auth: AuthContext = Depends(require_user), db: AsyncSession = Depends(get_db)):
     """Get plugin manifest for designer (backward compatibility)"""
     # This endpoint returns the same data as the regular manifest
-    return await get_plugin_manifest(current_user)
+    return await get_plugin_manifest(auth, db)
 
 
-@router.get("/plugins", dependencies=[Depends(get_current_user)])
-async def get_plugins(current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+@router.get("/plugins")
+async def get_plugins(auth: AuthContext = Depends(require_user), db: AsyncSession = Depends(get_db)):
     """Get all plugins for the current user (backward compatibility)"""
     try:
         # Get plugins from database (for backward compatibility with existing queries)
-        query = select(Plugin).where(Plugin.user_id == current_user.id)
+        query = select(Plugin).where(Plugin.user_id == auth.user_id)
         result = await db.execute(query)
         plugins = result.scalars().all()
 
@@ -365,12 +363,12 @@ async def get_plugins(current_user: User = Depends(get_current_user), db: AsyncS
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/modules", dependencies=[Depends(get_current_user)])
-async def get_modules(current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+@router.get("/modules")
+async def get_modules(auth: AuthContext = Depends(require_user), db: AsyncSession = Depends(get_db)):
     """Get all modules for the current user (backward compatibility)"""
     try:
         # Get modules from database
-        query = select(Module).where(Module.user_id == current_user.id)
+        query = select(Module).where(Module.user_id == auth.user_id)
         result = await db.execute(query)
         modules = result.scalars().all()
 
@@ -409,10 +407,10 @@ async def get_modules(current_user: User = Depends(get_current_user), db: AsyncS
 @router.post("/system/cleanup")
 async def manual_cleanup(
     background_tasks: BackgroundTasks,
-    current_user: User = Depends(get_current_user)
+    auth: AuthContext = Depends(require_user)
 ):
     """Manually trigger cleanup of unused plugin resources (admin only)"""
-    if not current_user.is_admin:
+    if not auth.is_admin:
         raise HTTPException(status_code=403, detail="Admin access required")
 
     try:

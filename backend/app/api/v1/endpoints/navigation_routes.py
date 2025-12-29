@@ -5,7 +5,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, text
 
 from app.core.database import get_db
-from app.core.security import get_current_user
+from app.core.auth_deps import require_user
+from app.core.auth_context import AuthContext
 from app.models.navigation import NavigationRoute
 from app.models.user import User
 from app.schemas.navigation import (
@@ -24,14 +25,14 @@ router = APIRouter()
 @router.get("/tree", response_model=List[NavigationRouteTree])
 async def get_navigation_tree(
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    auth: AuthContext = Depends(require_user)
 ):
     """Get navigation routes as a tree structure"""
     try:
         # Get all navigation routes for the user (flat list)
         result = await db.execute(
             select(NavigationRoute)
-            .where(NavigationRoute.creator_id == current_user.id)
+            .where(NavigationRoute.creator_id == auth.user_id)
             .order_by(NavigationRoute.display_order.asc())
         )
         all_routes = result.scalars().all()
@@ -82,7 +83,7 @@ async def get_navigation_tree(
 async def batch_update_navigation_routes(
     updates: List[NavigationRouteBatchUpdate],
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    auth: AuthContext = Depends(require_user)
 ):
     """Update multiple navigation routes in a single operation"""
     try:
@@ -94,7 +95,7 @@ async def batch_update_navigation_routes(
                 continue  # Skip non-existent routes
             
             # Check permissions
-            if str(route.creator_id).replace('-', '') != str(current_user.id).replace('-', ''):
+            if str(route.creator_id).replace('-', '') != str(auth.user_id).replace('-', ''):
                 continue  # Skip routes user doesn't own
             
             # Apply updates
@@ -137,7 +138,7 @@ async def batch_update_navigation_routes(
 @router.get("", response_model=List[NavigationRouteResponse])
 async def get_navigation_routes(
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    auth: AuthContext = Depends(require_user),
     visible_only: bool = Query(False, description="Filter to only visible routes")
 ):
     """
@@ -149,13 +150,13 @@ async def get_navigation_routes(
         try:
             if visible_only:
                 # Filter visible routes by current user's ID
-                routes = await NavigationRoute.get_visible_routes_by_user(db, current_user.id)
-                print(f"Found {len(routes)} visible routes for user {current_user.id}")
+                routes = await NavigationRoute.get_visible_routes_by_user(db, auth.user_id)
+                print(f"Found {len(routes)} visible routes for user {auth.user_id}")
             else:
                 # Get routes created by the current user
-                print(f"Fetching navigation routes for user {current_user.id}")
-                routes = await NavigationRoute.get_by_creator(db, current_user.id)
-                print(f"Found {len(routes)} total routes for user {current_user.id}")
+                print(f"Fetching navigation routes for user {auth.user_id}")
+                routes = await NavigationRoute.get_by_creator(db, auth.user_id)
+                print(f"Found {len(routes)} total routes for user {auth.user_id}")
                 
                 # Log each route for debugging
                 for route in routes:
@@ -224,7 +225,7 @@ async def get_navigation_routes(
 async def create_navigation_route(
     route_data: NavigationRouteCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    auth: AuthContext = Depends(require_user)
 ):
     """
     Create a new navigation route.
@@ -246,7 +247,7 @@ async def create_navigation_route(
             description=route_data.description,
             order=route_data.order,
             is_visible=route_data.is_visible,
-            creator_id=current_user.id,
+            creator_id=auth.user_id,
             can_change_default=route_data.can_change_default,
             default_component_id=route_data.default_component_id,
             default_page_id=str(route_data.default_page_id) if route_data.default_page_id is not None else None,
@@ -294,7 +295,7 @@ async def move_navigation_route(
     route_id: str,
     move_data: NavigationRouteMove,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    auth: AuthContext = Depends(require_user)
 ):
     """Move a navigation route to a different parent or position"""
     try:
@@ -306,7 +307,7 @@ async def move_navigation_route(
             )
         
         # Check permissions
-        if str(route.creator_id).replace('-', '') != str(current_user.id).replace('-', ''):
+        if str(route.creator_id).replace('-', '') != str(auth.user_id).replace('-', ''):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="You don't have permission to modify this route"
@@ -350,7 +351,7 @@ async def move_navigation_route(
 async def get_navigation_route(
     route_id: UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    auth: AuthContext = Depends(require_user)
 ):
     """
     Get a specific navigation route by ID.
@@ -403,7 +404,7 @@ async def update_navigation_route(
     route_id: UUID,
     route_data: NavigationRouteUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    auth: AuthContext = Depends(require_user)
 ):
     """
     Update a navigation route.
@@ -560,7 +561,7 @@ async def update_navigation_route(
 async def delete_navigation_route(
     route_id: UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    auth: AuthContext = Depends(require_user)
 ):
     """
     Delete a navigation route.
