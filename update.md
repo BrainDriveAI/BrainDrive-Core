@@ -33,9 +33,3 @@ This log summarizes the Phase 1.0 hardening work (auth consistency, admin enforc
 - Step 1.0.7: Add a CI guard to fail builds if `oauth2_scheme` appears outside auth deps; add a short internal rule doc.
 - Optional hygiene: Remove the token-preview log in `get_current_user` if we want zero token traces in logs.
 
-## Testing
-- `python -m pytest` was run; it failed during collection due to environment setup (not code failures):
-  - Import path: tests can’t import `app` because `PYTHONPATH` was not set to include `backend`.
-  - DB driver: async engine picked up sync sqlite; needs an async URL (e.g., `sqlite+aiosqlite:///./backend/test.db`) or an async driver.
-- Next steps to rerun tests: set `PYTHONPATH=backend` and `DATABASE_URL=sqlite+aiosqlite:///./backend/test.db`, then rerun `python -m pytest` (or a narrower target).
-
