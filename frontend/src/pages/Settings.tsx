@@ -215,7 +215,7 @@ const Settings = () => {
 		});
 
 		// Mark plugins as active if they have a corresponding setting
-		const active: SettingsPlugin[] = [];
+		const activeByModuleId = new Map<string, SettingsPlugin>();
 
 		settings.forEach((setting) => {
 			console.log(
@@ -247,7 +247,7 @@ const Settings = () => {
 				console.log(
 					`Activating plugin: ${plugin.displayName} for setting: ${setting.name}`
 				);
-				active.push({
+				activeByModuleId.set(plugin.moduleId, {
 					...plugin,
 					isActive: true,
 				});
@@ -272,7 +272,7 @@ const Settings = () => {
 						console.log(
 							`Found Ollama plugin by special case: ${ollamaPlugin.displayName}`
 						);
-						active.push({
+						activeByModuleId.set(ollamaPlugin.moduleId, {
 							...ollamaPlugin,
 							isActive: true,
 						});
@@ -280,6 +280,8 @@ const Settings = () => {
 				}
 			}
 		});
+
+		const active = Array.from(activeByModuleId.values());
 
 		// Sort active plugins by priority (high to low) and then by name
 		const sortedActive = [...active].sort((a, b) => {

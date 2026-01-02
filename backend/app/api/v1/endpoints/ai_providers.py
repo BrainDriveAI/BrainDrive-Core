@@ -421,6 +421,167 @@ async def get_providers():
     }
 
 
+@router.get("/catalog")
+async def get_provider_catalog(
+    user_id: Optional[str] = Query("current", description="User ID"),
+    db: AsyncSession = Depends(get_db),
+    current_user: Optional[User] = Depends(get_current_user)
+):
+    """
+    Return provider metadata for UI selection (provider -> settings_id, server strategy, etc)
+    plus per-user configured/enabled signals (no secrets).
+    """
+    # Resolve user_id from authentication if "current" is specified
+    if user_id == "current":
+        if not current_user:
+            raise HTTPException(status_code=401, detail="Authentication required")
+        user_id = str(current_user.id)
+
+    # Normalize user_id by removing hyphens if present
+    user_id = user_id.replace("-", "")
+
+    provider_meta: Dict[str, Dict[str, Any]] = {
+        "ollama": {
+            "settings_id": "ollama_servers_settings",
+            "server_strategy": "settings_servers",
+            "default_server_id": None,
+        },
+        "openai": {
+            "settings_id": "openai_api_keys_settings",
+            "server_strategy": "single",
+            "default_server_id": "openai_default_server",
+        },
+        "openrouter": {
+            "settings_id": "openrouter_api_keys_settings",
+            "server_strategy": "single",
+            "default_server_id": "openrouter_default_server",
+        },
+        "claude": {
+            "settings_id": "claude_api_keys_settings",
+            "server_strategy": "single",
+            "default_server_id": "claude_default_server",
+        },
+        "groq": {
+            "settings_id": "groq_api_keys_settings",
+            "server_strategy": "single",
+            "default_server_id": "groq_default_server",
+        },
+    }
+
+    def _get_env_api_key(provider_name: str) -> Optional[str]:
+        env_map = {
+            "openrouter": "OPENROUTER_API_KEY",
+            "openai": "OPENAI_API_KEY",
+            "claude": "ANTHROPIC_API_KEY",
+            "groq": "GROQ_API_KEY",
+        }
+        env_var = env_map.get(provider_name.lower())
+        if env_var:
+            return os.getenv(env_var)
+        return None
+
+    async def _load_settings_value(settings_id: str) -> Optional[Dict[str, Any]]:
+        if not settings_id:
+            return None
+        settings = await SettingInstance.get_all_parameterized(
+            db,
+            definition_id=settings_id,
+            scope=SettingScope.USER.value,
+            user_id=user_id
+        )
+        if not settings or len(settings) == 0:
+            settings = await SettingInstance.get_all(
+                db,
+                definition_id=settings_id,
+                scope=SettingScope.USER.value,
+                user_id=user_id
+            )
+        if not settings or len(settings) == 0:
+            return None
+
+        setting = settings[0]
+        setting_value = setting['value'] if isinstance(setting, dict) else getattr(setting, 'value', None)
+        setting_instance_id = setting['id'] if isinstance(setting, dict) else getattr(setting, 'id', '')
+
+        if isinstance(setting_value, dict):
+            return setting_value
+
+        raw_value = setting_value
+        try:
+            if isinstance(raw_value, str) and encryption_service.is_encrypted_value(raw_value):
+                raw_value = encryption_service.decrypt_field('settings_instances', 'value', raw_value)
+
+            value_dict = safe_encrypted_json_parse(
+                raw_value,
+                context=f"catalog settings_id={settings_id}, user_id={user_id}",
+                setting_id=setting_instance_id,
+                definition_id=settings_id,
+            )
+
+            if isinstance(value_dict, str):
+                # Some legacy rows stored the API key directly as a string
+                value_dict = {"api_key": value_dict}
+
+            return value_dict if isinstance(value_dict, dict) else None
+        except Exception:
+            return None
+
+    providers: List[Dict[str, Any]] = []
+    for provider in provider_registry.get_available_providers():
+        meta = provider_meta.get(provider, {})
+        settings_id = meta.get("settings_id")
+        server_strategy = meta.get("server_strategy", "unknown")
+        default_server_id = meta.get("default_server_id")
+
+        settings_value = await _load_settings_value(settings_id) if settings_id else None
+
+        enabled = True
+        if isinstance(settings_value, dict) and isinstance(settings_value.get("enabled"), bool):
+            enabled = bool(settings_value.get("enabled"))
+
+        configured = False
+        configured_via = None
+        server_count = 0
+
+        if provider == "ollama":
+            servers = []
+            if isinstance(settings_value, dict):
+                servers = settings_value.get("servers", []) or []
+            servers = servers if isinstance(servers, list) else []
+            server_count = len(servers)
+            configured = any(bool(s.get("serverAddress")) for s in servers if isinstance(s, dict))
+            configured_via = "settings" if configured else None
+        else:
+            api_key = None
+            if isinstance(settings_value, dict):
+                api_key = settings_value.get("api_key") or settings_value.get("apiKey")
+            if isinstance(api_key, str) and api_key.strip():
+                configured = True
+                configured_via = "settings"
+            else:
+                env_key = _get_env_api_key(provider)
+                if isinstance(env_key, str) and env_key.strip():
+                    configured = True
+                    configured_via = "env"
+
+        providers.append({
+            "id": provider,
+            "label": provider.replace("_", " ").title(),
+            "settings_id": settings_id,
+            "server_strategy": server_strategy,
+            "default_server_id": default_server_id,
+            "configured": configured,
+            "configured_via": configured_via,
+            "enabled": enabled,
+            "server_count": server_count,
+        })
+
+    return {
+        "user_id": user_id,
+        "providers": providers,
+    }
+
+
 @router.post("/validate")
 async def validate_provider(request: ValidationRequest):
     """Validate connection to a provider."""
@@ -608,6 +769,8 @@ async def get_models(
         return {
             "models": models
         }
+    except HTTPException:
+        raise
     except Exception as e:
         print(f"Error in get_models: {e}")
         import traceback

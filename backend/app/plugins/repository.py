@@ -164,7 +164,15 @@ class PluginRepository:
         """
         try:
             result = await self.db.execute(
-                text("SELECT value FROM settings_instances WHERE definition_id = :def_id AND user_id = :user_id"),
+                text("""
+                SELECT value
+                FROM settings_instances
+                WHERE definition_id = :def_id
+                  AND user_id = :user_id
+                  AND (page_id IS NULL OR page_id = '')
+                ORDER BY updated_at DESC
+                LIMIT 1
+                """),
                 {"def_id": definition_id, "user_id": user_id}
             )
             row = result.fetchone()

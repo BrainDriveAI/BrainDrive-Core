@@ -197,9 +197,14 @@ class PluginServiceRuntime(Base):
     type = Column(String)
     install_command = Column(Text)
     start_command = Column(Text)
+    stop_command = Column(Text)
+    restart_command = Column(Text)
     healthcheck_url = Column(String)
     definition_id = Column(String)
     required_env_vars = Column(Text)  # store as JSON string
+    runtime_dir_key = Column(String)
+    env_inherit = Column(String)
+    env_overrides = Column(Text)  # store as JSON string
     status = Column(String, default="pending")
 
     created_at = Column(DateTime, default=datetime.now(UTC))
@@ -224,9 +229,14 @@ class PluginServiceRuntime(Base):
             "type": self.type,
             "install_command": self.install_command,
             "start_command": self.start_command,
+            "stop_command": self.stop_command,
+            "restart_command": self.restart_command,
             "healthcheck_url": self.healthcheck_url,
             "definition_id": self.definition_id,
             "required_env_vars": json.loads(self.required_env_vars) if self.required_env_vars else [],
+            "runtime_dir_key": self.runtime_dir_key,
+            "env_inherit": self.env_inherit,
+            "env_overrides": json.loads(self.env_overrides) if self.env_overrides else {},
             "status": self.status,
             "user_id": self.user_id,
             "created_at": self.created_at.isoformat() if self.created_at else None,
@@ -242,6 +252,9 @@ class PluginServiceRuntime(Base):
         
         if "required_env_vars" in db_data and db_data["required_env_vars"] is not None:
             db_data["required_env_vars"] = json.dumps(db_data["required_env_vars"])
+
+        if "env_overrides" in db_data and db_data["env_overrides"] is not None:
+            db_data["env_overrides"] = json.dumps(db_data["env_overrides"])
             
         # Handle conversion from camelCase to snake_case if necessary
         # For simplicity, we are assuming keys in the incoming dict match model attributes
