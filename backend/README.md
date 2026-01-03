@@ -4,8 +4,6 @@
 
 BrainDrive Backend is the engine behind the BrainDrive application—a modular, extensible AI platform. This FastAPI-based backend provides robust APIs for managing users, plugins, conversations, settings, and more, with a focus on flexibility, security, and developer experience.
 
----
-
 ## 🛠️ Tech Stack
 
 * **[FastAPI](https://fastapi.tiangolo.com/)** — High-performance, Python-based web framework
@@ -17,8 +15,6 @@ BrainDrive Backend is the engine behind the BrainDrive application—a modular, 
 * **[Structlog](https://www.structlog.org/)** — Structured logging
 * **[Passlib](https://passlib.readthedocs.io/)** — Password hashing
 * **[Python-Jose](https://python-jose.readthedocs.io/)** — JWT creation and verification
-
----
 
 ## ✨ Features
 
@@ -32,8 +28,6 @@ BrainDrive Backend is the engine behind the BrainDrive application—a modular, 
 * 💬 Conversation history management
 * 🏷️ Tag-based organization system
 * 🌐 CORS, environment profiles, and structured logging
-
----
 
 ## 📄 Document Processing
 
@@ -86,16 +80,12 @@ sudo systemctl enable braindrive
 sudo systemctl start braindrive
 ```
 
----
-
 ## 📖 API Docs
 
 Once running:
 
 * Swagger UI: [http://localhost:8005/api/v1/docs](http://localhost:8005/api/v1/docs)
 * ReDoc: [http://localhost:8005/api/v1/redoc](http://localhost:8005/api/v1/redoc)
-
----
 
 ## 🧪 Development Workflow
 
@@ -109,8 +99,6 @@ Once running:
    pip freeze > requirements.txt
    ```
 
----
-
 ## 🛠 Troubleshooting
 
 | Issue                 | Solution                                       |
@@ -121,13 +109,9 @@ Once running:
 | DB errors             | Check `.env` values and DB file                |
 | Activation fails      | Confirm conda/venv setup and shell support     |
 
----
-
 ## 📄 License
 
 [MIT License](../LICENSE)
-
----
 
 ## 🤝 Contributing
 
@@ -137,14 +121,10 @@ We welcome contributions! Please open issues or submit PRs for bugs, enhancement
 * Document new APIs with OpenAPI annotations
 * Run tests before submitting changes
 
----
-
 ## 🌐 Additional Resources
 
 * [FastAPI Docs](https://fastapi.tiangolo.com/)
 * [Alembic Docs](https://alembic.sqlalchemy.org/)
 * [SQLModel Docs](https://sqlmodel.tiangolo.com/)
 * [Structlog Docs](https://www.structlog.org/)
-
----
 
