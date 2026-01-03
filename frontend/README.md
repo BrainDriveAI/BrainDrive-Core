@@ -2,7 +2,7 @@
 
 The web interface for BrainDrive - your user-owned AI platform.
 
-The frontend includes **PageBuilder**, a drag-and-drop interface for building AI-powered applications using BrainDrive plugins. Create responsive, interactive pages without coding - from multi-model chat interfaces to AI-powered games and custom dashboards.
+The frontend includes **PageBuilder**, a drag-and-drop interface for building AI-powered applications using [BrainDrive plugins](https://docs.braindrive.ai/plugins/intro). Create responsive, interactive pages without coding - from multi-model chat interfaces to AI-powered games and custom dashboards.
 
 > **Note:** The frontend requires the [BrainDrive Backend](../backend/README.md) to be running. See the [Installation Guide](https://docs.braindrive.ai/core/getting-started/install) for complete setup instructions.
 
