@@ -43,14 +43,14 @@ A page builder to create custom interfaces using your own and other publicly ava
 
 ![Page Builder](./images/Page-Builder.png)
 
-### For Users
+### For BrainDrive Owners
 
 * **Drag & Drop Interface**: Build applications visually without coding
 * **Responsive Design**: Works on desktop, tablet, and mobile
 * **Plugin Marketplace**: Extend functionality with community plugins
 * **Own Your Data**: Host locally or deploy anywhere, no vendor lock-in
 
-### For Developers
+### For BrainDrive Builders
 
 * **1-Minute Development Cycle**: Edit → Build → Refresh
 * **Zero Dependencies**: Service Bridges handle all complexity
