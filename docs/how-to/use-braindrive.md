@@ -38,7 +38,7 @@ Provides the primary UI (chat, page builder, etc.) and backend services (user ma
 * **Frontend:** React + TypeScript web application
 * **Backend:** Python FastAPI server with a SQLite database (default)
 
-### Plugin Ecosystem (Seperate repositories)
+### Plugin Ecosystem (Separate repositories)
 
 * Each plugin is a separate module (its own repository) that can be added dynamically.
 * Uses Webpack Module Federation to load frontend plugins at runtime.

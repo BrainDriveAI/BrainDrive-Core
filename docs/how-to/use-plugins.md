@@ -8,7 +8,7 @@ BrainDrive-Core provides your AI system's foundation. Plugins provide the freedo
 
 ## The 4 Pillars of BrainDrive
 
-BrainDrive's plugin based archetecture rests on these 4 pillars:
+BrainDrive's plugin based architecture rests on these 4 pillars:
 
 1. **Ownership:** You own your BrainDrive, and any plugins you create.  
 2. **Freedom:** Use and/or build any plugin you want in your BrainDrive. Deploy locally or on the cloud of your choice.  
