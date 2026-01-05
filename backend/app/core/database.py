@@ -6,6 +6,8 @@ from sqlalchemy.orm import sessionmaker, declarative_base
 from sqlalchemy.pool import NullPool
 from sqlalchemy.engine.url import make_url
 
+import contextlib
+import asyncio
 from app.core.config import settings
 from app.core.json_storage import JSONStorage
 
@@ -90,8 +92,10 @@ async def get_db():
             await db.rollback()
             raise
         finally:
-            try:
-                await db.close()
-            except Exception as close_error:
-                # Log but don't raise close errors to avoid masking the real error
-                logger.warning(f"Error closing database session: {close_error}")
+            # Swallow cancellation during shutdown/reload and log close issues without raising
+            with contextlib.suppress(asyncio.CancelledError):
+                try:
+                    await db.close()
+                except Exception as close_error:
+                    # Log but don't raise close errors to avoid masking the real error
+                    logger.warning(f"Error closing database session: {close_error}")

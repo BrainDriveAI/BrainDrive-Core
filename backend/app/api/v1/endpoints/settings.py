@@ -32,61 +32,60 @@ def mask_sensitive_data(definition_id: str, value: any) -> any:
     """
     if not value:
         return value
+
+    def _resolve_api_key_field(payload: dict) -> tuple[str, str] | tuple[None, None]:
+        """Return (field_name, api_key) for common key spellings."""
+        if not isinstance(payload, dict):
+            return (None, None)
+        for candidate in ("api_key", "apiKey", "apikey", "API_KEY"):
+            api_key = payload.get(candidate)
+            if isinstance(api_key, str):
+                return (candidate, api_key)
+        return (None, None)
+
+    def _mask_key(payload: dict, field_name: str, api_key: str, *, prefix: str, min_len: int, show_first: int, show_last: int) -> dict:
+        if not isinstance(payload, dict):
+            return payload
+        if not api_key:
+            return payload
+        # Always mask when a key is present, even if it is malformed/too short.
+        if len(api_key) <= (show_first + show_last):
+            masked = "***" if len(api_key) < 2 else f"{api_key[:1]}...{api_key[-1:]}"
+        else:
+            masked = api_key[:show_first] + "..." + api_key[-show_last:]
+        return {
+            **payload,
+            field_name: masked,
+            "_has_key": bool(api_key.strip()),
+            "_key_valid": bool(api_key.startswith(prefix) and len(api_key) >= min_len),
+        }
     
     # Handle OpenAI API keys
     if definition_id == "openai_api_keys_settings":
-        if isinstance(value, dict) and "api_key" in value:
-            api_key = value["api_key"]
-            if api_key and len(api_key) >= 11:
-                # Mask the API key (first 7 + last 4 characters)
-                masked_key = api_key[:7] + "..." + api_key[-4:]
-                return {
-                    **value,
-                    "api_key": masked_key,
-                    "_has_key": bool(api_key.strip()),
-                    "_key_valid": bool(api_key.startswith('sk-') and len(api_key) >= 23)
-                }
+        if isinstance(value, dict):
+            field_name, api_key = _resolve_api_key_field(value)
+            if field_name and api_key:
+                return _mask_key(value, field_name, api_key, prefix="sk-", min_len=23, show_first=7, show_last=4)
     
     # Handle OpenRouter API keys
     if definition_id == "openrouter_api_keys_settings":
-        if isinstance(value, dict) and "api_key" in value:
-            api_key = value["api_key"]
-            if api_key and len(api_key) >= 11:
-                # Mask the API key (first 7 + last 4 characters)
-                masked_key = api_key[:7] + "..." + api_key[-4:]
-                return {
-                    **value,
-                    "api_key": masked_key,
-                    "_has_key": bool(api_key.strip()),
-                    "_key_valid": bool(api_key.startswith('sk-or-') and len(api_key) >= 26)
-                }
+        if isinstance(value, dict):
+            field_name, api_key = _resolve_api_key_field(value)
+            if field_name and api_key:
+                return _mask_key(value, field_name, api_key, prefix="sk-or-", min_len=26, show_first=7, show_last=4)
     
     # Handle Claude API keys
     if definition_id == "claude_api_keys_settings":
-        if isinstance(value, dict) and "api_key" in value:
-            api_key = value["api_key"]
-            if api_key and len(api_key) >= 11:
-                # Mask the API key (first 7 + last 4 characters)
-                masked_key = api_key[:7] + "..." + api_key[-4:]
-                return {
-                    **value,
-                    "api_key": masked_key,
-                    "_has_key": bool(api_key.strip()),
-                    "_key_valid": bool(api_key.startswith('sk-ant-') and len(api_key) >= 26)
-                }
+        if isinstance(value, dict):
+            field_name, api_key = _resolve_api_key_field(value)
+            if field_name and api_key:
+                return _mask_key(value, field_name, api_key, prefix="sk-ant-", min_len=26, show_first=7, show_last=4)
     
     if definition_id == "groq_api_keys_settings":
-        if isinstance(value, dict) and "api_key" in value:
-            api_key = value["api_key"]
-            if api_key and len(api_key) >= 11:
-                # Mask the API key (first 4 + last 4 characters for gsk_ format)
-                masked_key = api_key[:4] + "..." + api_key[-4:]
-                return {
-                    **value,
-                    "api_key": masked_key,
-                    "_has_key": bool(api_key.strip()),
-                    "_key_valid": bool(api_key.startswith('gsk_') and len(api_key) >= 24)
-                }
+        if isinstance(value, dict):
+            field_name, api_key = _resolve_api_key_field(value)
+            if field_name and api_key:
+                return _mask_key(value, field_name, api_key, prefix="gsk_", min_len=24, show_first=4, show_last=4)
     
     return value
 
@@ -274,11 +273,17 @@ async def get_setting_definitions(
         result = await db.execute(text(query), params)
         rows = result.fetchall()
         
+        def _safe_json(value, default=None):
+            try:
+                return json.loads(value) if value not in (None, "") else default
+            except (json.JSONDecodeError, TypeError):
+                return default
+
         # Convert rows to dictionaries
         definitions = []
         for row in rows:
             # Parse JSON fields
-            allowed_scopes = json.loads(row[6]) if row[6] else []
+            allowed_scopes = _safe_json(row[6], [])
             # Convert allowed_scopes from strings to SettingScope enum values
             allowed_scopes_enum = [SettingScope(scope) for scope in allowed_scopes]
             
@@ -288,11 +293,11 @@ async def get_setting_definitions(
                 "description": row[2],
                 "category": row[3],
                 "type": row[4],
-                "default_value": json.loads(row[5]) if row[5] else None,
+                "default_value": _safe_json(row[5], None),
                 "allowed_scopes": allowed_scopes_enum,
-                "validation": json.loads(row[7]) if row[7] else None,
+                "validation": _safe_json(row[7], None),
                 "is_multiple": row[8],
-                "tags": json.loads(row[9]) if row[9] else [],
+                "tags": _safe_json(row[9], []),
                 "created_at": row[10],
                 "updated_at": row[11]
             }
@@ -750,9 +755,21 @@ async def create_setting_instance(
         
         # Ensure user context is set correctly
         if instance_data.scope == SettingScope.USER or instance_data.scope == SettingScope.USER_PAGE:
-            if not instance_data.user_id and auth:
-                logger.info(f"Setting user_id to current user: {auth.user_id}")
-                instance_data.user_id = auth.user_id
+
+    # Allow "current" keyword using auth context
+    if instance_data.user_id == "current":
+        if not auth:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Authentication required for user settings"
+            )
+        logger.info(f"Resolving user_id 'current' to: {auth.user_id}")
+        instance_data.user_id = str(auth.user_id)
+
+    # Auto-inject authenticated user if missing
+    if not instance_data.user_id and auth:
+        logger.info(f"Setting user_id to current user: {auth.user_id}")
+        instance_data.user_id = str(auth.user_id)
         
         try:
             # Get the definition to validate the value and scopes using direct SQL
@@ -822,17 +839,21 @@ async def create_setting_instance(
                     "scope": scope_value
                 }
                 
-                if instance_data.user_id:
+                resolved_user_id = instance_data.user_id
+                if resolved_user_id == "current" and current_user:
+                    resolved_user_id = str(current_user.id)
+
+                if resolved_user_id:
                     conditions.append("user_id = :user_id")
-                    params["user_id"] = instance_data.user_id
+                    params["user_id"] = resolved_user_id
                 else:
-                    conditions.append("user_id IS NULL")
+                    conditions.append("(user_id IS NULL OR user_id = '')")
                 
                 if instance_data.page_id:
                     conditions.append("page_id = :page_id")
                     params["page_id"] = instance_data.page_id
                 else:
-                    conditions.append("page_id IS NULL")
+                    conditions.append("(page_id IS NULL OR page_id = '')")
                 
                 # Build and execute the query
                 where_clause = " AND ".join(conditions)
@@ -840,6 +861,8 @@ async def create_setting_instance(
                 SELECT id, definition_id, name, value, scope, user_id, page_id, created_at, updated_at
                 FROM settings_instances
                 WHERE {where_clause}
+                ORDER BY updated_at DESC
+                LIMIT 1
                 """)
                 
                 result = await db.execute(check_instance_query, params)
@@ -849,11 +872,9 @@ async def create_setting_instance(
                     logger.info(f"Found existing instance for this context: {existing_row[0]}")
                     # Use direct SQL to update the existing instance
                     existing_id = existing_row[0]
-                    
-                    # Convert value to JSON string if it's not already
-                    value_json = instance_data.value
-                    if not isinstance(value_json, str):
-                        value_json = json.dumps(value_json)
+                    from app.core.encrypted_column import EncryptedJSON
+                    encrypted_column = EncryptedJSON("settings_instances", "value")
+                    encrypted_value = encrypted_column.process_bind_param(instance_data.value, None)
                     
                     update_query = text("""
                     UPDATE settings_instances
@@ -863,7 +884,7 @@ async def create_setting_instance(
                     
                     await db.execute(update_query, {
                         "name": instance_data.name,
-                        "value": value_json,
+                        "value": encrypted_value,
                         "id": existing_id
                     })
                     
@@ -885,12 +906,14 @@ async def create_setting_instance(
                             detail=f"Setting instance {existing_id} not found after update"
                         )
                     
+                    decrypted_value = encrypted_column.process_result_value(updated_row[3], None)
+
                     # Convert row to dict
                     updated_instance = {
                         "id": updated_row[0],
                         "definition_id": updated_row[1],
                         "name": updated_row[2],
-                        "value": json.loads(updated_row[3]) if updated_row[3] else None,
+                        "value": decrypted_value,
                         "scope": updated_row[4],
                         "user_id": updated_row[5],
                         "page_id": updated_row[6],
@@ -1074,6 +1097,7 @@ async def get_setting_instances(
         SELECT id, definition_id, name, value, scope, user_id, page_id, created_at, updated_at
         FROM settings_instances
         WHERE {where_clause}
+        ORDER BY updated_at DESC
         """)
         
         result = await db.execute(query, params)

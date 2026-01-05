@@ -189,10 +189,15 @@ class UniversalPluginLifecycleManager:
 
         return None
 
-    def _load_plugin_manager(self, plugin_slug: str):
+    def _load_plugin_manager(self, plugin_slug: str, force_reload: bool = False):
         """Dynamically load a plugin's lifecycle manager"""
         try:
             logger.info(f"Universal manager: Loading plugin manager for {plugin_slug}")
+
+            if force_reload:
+                if plugin_slug in self._plugin_managers:
+                    logger.info(f"Universal manager: Evicting cached manager for {plugin_slug}")
+                    self._plugin_managers.pop(plugin_slug, None)
 
             if plugin_slug in self._plugin_managers:
                 logger.info(f"Universal manager: Using cached manager for {plugin_slug}")
@@ -422,6 +427,7 @@ from app.core.auth_deps import require_user
 from app.core.auth_context import AuthContext
 from app.models.user import User
 from app.plugins.service_installler.plugin_service_manager import restart_plugin_services
+from app.plugins.service_installler.plugin_service_manager import start_plugin_services_from_db, stop_plugin_services_from_db
 
 
 @router.post("/{plugin_slug}/services/restart")
@@ -433,11 +439,13 @@ async def restart_plugin_service(
 ):
     """
     Restart one or all plugin services using DB-stored environment variables.
+    Supports optional env payload to refresh .env files before restart.
     Requires plugin_slug, definition_id and user_id (body).
     """
     service_name = payload.get("service_name")
     definition_id = payload.get("definition_id")
     user_id = payload.get("user_id")
+    env_payload = payload.get("env")
 
     # If user_id is specified, ensure it matches the current user's ID (if authenticated)
     if user_id:
@@ -463,10 +471,116 @@ async def restart_plugin_service(
         raise HTTPException(status_code=400, detail="definition_id is required")
     
     async def restart_task():
+        # Optionally refresh .env files via plugin lifecycle manager if available
+        if env_payload:
+            try:
+                manager = universal_manager._load_plugin_manager(plugin_slug, force_reload=True)
+                if hasattr(manager, "apply_env_updates"):
+                    await manager.apply_env_updates(env_payload, restart=False)  # Write .env only
+            except Exception as exc:
+                logger.warning("Env update skipped during restart", plugin_slug=plugin_slug, error=str(exc))
         await restart_plugin_services(plugin_slug, definition_id, user_id, service_name)
 
     background_tasks.add_task(restart_task)
     return {"success": True, "message": "Restart initiated in the background"}
+
+
+@router.post("/{plugin_slug}/services/start")
+async def start_plugin_service(
+    plugin_slug: str,
+    background_tasks: BackgroundTasks,
+    payload: dict = Body(...),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Start one or all plugin services.
+    Supports optional env payload to refresh .env files before start.
+    Requires plugin_slug, definition_id and user_id (body) for DB-backed env vars.
+    """
+    service_name = payload.get("service_name")
+    definition_id = payload.get("definition_id")
+    user_id = payload.get("user_id")
+    env_payload = payload.get("env")
+
+    if user_id:
+        if user_id == "current":
+            if not current_user:
+                logger.warning("User ID 'current' specified but no current user available")
+                return []
+            user_id = str(current_user.id)
+            logger.info(f"Using current user ID: {user_id}")
+        elif current_user:
+            if str(current_user.id) != str(user_id):
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Cannot access settings for another user"
+                )
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Authentication required to access user settings"
+            )
+
+    if not definition_id:
+        raise HTTPException(status_code=400, detail="definition_id is required")
+
+    async def start_task():
+        if env_payload:
+            try:
+                manager = universal_manager._load_plugin_manager(plugin_slug, force_reload=True)
+                if hasattr(manager, "apply_env_updates"):
+                    await manager.apply_env_updates(env_payload, restart=False)
+            except Exception as exc:
+                logger.warning("Env update skipped during start", plugin_slug=plugin_slug, error=str(exc))
+
+        await start_plugin_services_from_db(plugin_slug, definition_id, user_id, service_name)
+
+    background_tasks.add_task(start_task)
+    return {"success": True, "message": "Start initiated in the background"}
+
+
+@router.post("/{plugin_slug}/services/stop")
+async def stop_plugin_service(
+    plugin_slug: str,
+    background_tasks: BackgroundTasks,
+    payload: dict = Body(...),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Stop one or all plugin services.
+    Requires plugin_slug, definition_id and user_id (body) for authorization.
+    """
+    service_name = payload.get("service_name")
+    definition_id = payload.get("definition_id")
+    user_id = payload.get("user_id")
+
+    if user_id:
+        if user_id == "current":
+            if not current_user:
+                logger.warning("User ID 'current' specified but no current user available")
+                return []
+            user_id = str(current_user.id)
+            logger.info(f"Using current user ID: {user_id}")
+        elif current_user:
+            if str(current_user.id) != str(user_id):
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Cannot access settings for another user"
+                )
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Authentication required to access user settings"
+            )
+
+    if not definition_id:
+        raise HTTPException(status_code=400, detail="definition_id is required")
+
+    async def stop_task():
+        await stop_plugin_services_from_db(plugin_slug, definition_id, user_id, service_name)
+
+    background_tasks.add_task(stop_task)
+    return {"success": True, "message": "Stop initiated in the background"}
 
 
 # Local plugin management endpoints

@@ -38,7 +38,7 @@ Provides the primary UI (chat, page builder, etc.) and backend services (user ma
 * **Frontend:** React + TypeScript web application
 * **Backend:** Python FastAPI server with a SQLite database (default)
 
-### Plugin Ecosystem (Seperate repositories)
+### Plugin Ecosystem (Separate repositories)
 
 * Each plugin is a separate module (its own repository) that can be added dynamically.
 * Uses Webpack Module Federation to load frontend plugins at runtime.
@@ -134,7 +134,8 @@ BrainDrive's plugin system is designed for safety and simplicity. All plugins ar
 ### Plugin Management
 
 * **Enable/Disable**: Turn plugins on/off without uninstalling 
-* **Update**: Get latest features when plugin authors release updates **Uninstall**: Completely remove plugin files and data
+* **Update**: Get latest features when plugin authors release updates
+* **Uninstall**: Completely remove plugin files and data
 
 ### Plugin Safety
 
@@ -142,7 +143,7 @@ BrainDrive's plugin system is designed for safety and simplicity. All plugins ar
 * **Error Boundaries**: Plugin failures won't crash your system  
 * **Isolated State**: Each plugin manages its own data
 
-## Adding Persona's 
+## Adding Personas 
 
 Personas allow you to easily customize the behavior of the AI models you use in your BrainDrive. 
 
@@ -152,7 +153,7 @@ Personas can be easily used across any AI chat, and allow you to control the sys
 
 ## Building on BrainDrive
 
-BrainDrive's decoupled modular archetecture is designed so that you can make your AI system whatever you want it to be.
+BrainDrive's decoupled modular architecture is designed so that you can make your AI system whatever you want it to be.
 
 **With BrainDrive Plugins:**
 

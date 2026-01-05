@@ -1,52 +1,65 @@
 # BrainDrive Backend
 
-## 🚀 Overview
+The API server for BrainDrive - a modular, extensible AI platform.
 
-BrainDrive Backend is the engine behind the BrainDrive application—a modular, extensible AI platform. This FastAPI-based backend provides robust APIs for managing users, plugins, conversations, settings, and more, with a focus on flexibility, security, and developer experience.
+BrainDrive Backend is a FastAPI-based server that powers the BrainDrive application, providing APIs for managing users, plugins, conversations, AI providers, and more.
 
----
+> **Note:** The backend is designed to work with the [BrainDrive Frontend](../frontend/README.md). See the [Installation Guide](https://docs.braindrive.ai/core/getting-started/install) for complete setup instructions.
 
-## 🛠️ Tech Stack
+## How Frontend and Backend Work Together
 
-* **[FastAPI](https://fastapi.tiangolo.com/)** — High-performance, Python-based web framework
-* **[SQLModel](https://sqlmodel.tiangolo.com/)** — ORM built on SQLAlchemy and Pydantic
-* **[Uvicorn](https://www.uvicorn.org/)** — Lightning-fast ASGI server
-* **[Pydantic](https://docs.pydantic.dev/)** — Data validation and serialization
-* **[Alembic](https://alembic.sqlalchemy.org/)** — Database migrations
-* **[SQLite](https://www.sqlite.org/)** — Default lightweight database engine
-* **[Structlog](https://www.structlog.org/)** — Structured logging
-* **[Passlib](https://passlib.readthedocs.io/)** — Password hashing
-* **[Python-Jose](https://python-jose.readthedocs.io/)** — JWT creation and verification
+BrainDrive uses a client-server architecture:
 
----
+| Component | Role |
+|-----------|------|
+| **Frontend** | React web app that users interact with - handles UI, PageBuilder, and plugin rendering |
+| **Backend** | FastAPI server that handles data, authentication, AI providers, and business logic |
 
-## ✨ Features
+The frontend communicates with the backend via REST APIs. When a user performs an action (e.g., sending a chat message, installing a plugin, saving a page), the frontend makes API calls to the backend, which processes the request and returns data.
 
-* 🔒 JWT-based authentication with refresh tokens
-* 👤 User registration, login, and profile management
-* 🔄 User updaters run automatically after each login
-* ⚙️ Dynamic settings system with multi-tier support
-* 🤖 Modular plugin system with automatic discovery
-* 📚 AI provider registry and switching support
-* 🧭 Dynamic navigation and component rendering
-* 💬 Conversation history management
-* 🏷️ Tag-based organization system
-* 🌐 CORS, environment profiles, and structured logging
+**Key integration points:**
+- **Authentication**: Backend issues JWT tokens; frontend stores and sends them with requests
+- **Plugins**: Backend manages plugin metadata and storage; frontend renders plugin UI
+- **AI Providers**: Backend connects to AI models (Ollama, etc.); frontend displays responses
+- **Pages & Routes**: Backend stores page configurations; frontend renders them via PageBuilder
 
----
+## Tech Stack
 
-## 📄 Document Processing
+- **[FastAPI](https://fastapi.tiangolo.com/)** - High-performance Python web framework
+- **[SQLModel](https://sqlmodel.tiangolo.com/)** - ORM built on SQLAlchemy and Pydantic
+- **[Uvicorn](https://www.uvicorn.org/)** - ASGI server
+- **[Pydantic](https://docs.pydantic.dev/)** - Data validation and serialization
+- **[Alembic](https://alembic.sqlalchemy.org/)** - Database migrations
+- **[SQLite](https://www.sqlite.org/)** - Default database engine
+- **[Structlog](https://www.structlog.org/)** - Structured logging
+- **[Passlib](https://passlib.readthedocs.io/)** - Password hashing
+- **[Python-Jose](https://python-jose.readthedocs.io/)** - JWT creation and verification
 
-- Layout-aware extraction for PDF, DOCX/RTF, PPTX, spreadsheets (XLSX/XLS/ODS), CSV, JSON, Markdown/HTML/XML/text, EML, and EPUB.
-- Registry-driven detection (magic, MIME, extension) powers `/api/v1/documents/supported-types` and keeps upload validation in sync.
-- Runtime guards: 10MB upload ceiling, configurable character caps, and chunking defaults tuned for chat context (25 segments, 2k chars, 200 overlap).
-- Optional query flags on `/process` and `/process-multiple`: `include_chunks`, `max_chars`, `preserve_layout` (PDF), and `strip_boilerplate` (HTML/EML).
+## Features
 
-## 📦 Installation
+- JWT-based authentication with refresh tokens
+- User registration, login, and profile management
+- User updaters run automatically after each login
+- Dynamic settings system with multi-tier support
+- Modular plugin system with automatic discovery
+- AI provider registry and switching support
+- Dynamic navigation and component rendering
+- Conversation history management
+- Tag-based organization system
+- CORS, environment profiles, and structured logging
 
-- [Installation Guide](../INSTALL.md) - Complete instructions how to setup your BrainDrive
+## Document Processing
 
-## ▶️ Running the Backend
+- Layout-aware extraction for PDF, DOCX/RTF, PPTX, spreadsheets (XLSX/XLS/ODS), CSV, JSON, Markdown/HTML/XML/text, EML, and EPUB
+- Registry-driven detection (magic, MIME, extension) powers `/api/v1/documents/supported-types` and keeps upload validation in sync
+- Runtime guards: 10MB upload ceiling, configurable character caps, and chunking defaults tuned for chat context (25 segments, 2k chars, 200 overlap)
+- Optional query flags on `/process` and `/process-multiple`: `include_chunks`, `max_chars`, `preserve_layout` (PDF), and `strip_boilerplate` (HTML/EML)
+
+## Installation
+
+See the [Installation Guide](https://docs.braindrive.ai/core/getting-started/install) for complete setup instructions including both frontend and backend.
+
+## Running the Backend
 
 ### Development Mode
 
@@ -57,7 +70,7 @@ uvicorn main:app --reload --host 0.0.0.0 --port 8005
 ### Production Mode
 
 1. Set in `.env`: `APP_ENV=prod`, `DEBUG=false`, `RELOAD=false`
-2. Run with process manager (e.g., systemd, supervisor):
+2. Run with a process manager (e.g., systemd, supervisor):
 
 ```bash
 uvicorn main:app --host 0.0.0.0 --port 8005 --workers 4
@@ -86,65 +99,40 @@ sudo systemctl enable braindrive
 sudo systemctl start braindrive
 ```
 
----
-
-## 📖 API Docs
+## API Documentation
 
 Once running:
 
-* Swagger UI: [http://localhost:8005/api/v1/docs](http://localhost:8005/api/v1/docs)
-* ReDoc: [http://localhost:8005/api/v1/redoc](http://localhost:8005/api/v1/redoc)
+- Swagger UI: [http://localhost:8005/api/v1/docs](http://localhost:8005/api/v1/docs)
+- ReDoc: [http://localhost:8005/api/v1/redoc](http://localhost:8005/api/v1/redoc)
 
----
+## Troubleshooting
 
-## 🧪 Development Workflow
+| Issue | Solution |
+|-------|----------|
+| Package install fails | `pip install --upgrade pip`, retry install |
+| Port in use | Change `PORT` in `.env` |
+| Module not found | `pip install <module>` and update requirements |
+| DB errors | Check `.env` values and DB file |
+| Activation fails | Confirm conda/venv setup and shell support |
 
-1. Activate your environment (`conda activate BrainDriveDev` or `source venv/bin/activate`)
-2. Pull latest changes
-3. Install new dependencies if needed
-4. Test locally
-5. Add/update requirements with:
+## Contributing
 
-   ```bash
-   pip freeze > requirements.txt
-   ```
+Interested in developing plugins or contributing to BrainDrive? See the [Plugin Developer Quickstart](https://docs.braindrive.ai/core/getting-started/plugin-developer-quickstart).
 
----
+When contributing to the backend:
+- Follow PEP8 and use type hints
+- Document new APIs with OpenAPI annotations
+- Run tests before submitting changes
 
-## 🛠 Troubleshooting
+## Documentation
 
-| Issue                 | Solution                                       |
-| --------------------- | ---------------------------------------------- |
-| Package install fails | `pip install --upgrade pip`, retry install     |
-| Port in use           | Change `PORT` in `.env`                        |
-| Module not found      | `pip install <module>` and update requirements |
-| DB errors             | Check `.env` values and DB file                |
-| Activation fails      | Confirm conda/venv setup and shell support     |
+Full documentation is available at [docs.braindrive.ai](https://docs.braindrive.ai).
 
----
+## Questions?
 
-## 📄 License
+Post at [community.braindrive.ai](https://community.braindrive.ai). We're here to help build the future of user-owned AI together.
 
-[MIT License](../LICENSE)
+## License
 
----
-
-## 🤝 Contributing
-
-We welcome contributions! Please open issues or submit PRs for bugs, enhancements, or documentation improvements.
-
-* Follow PEP8 and use type hints
-* Document new APIs with OpenAPI annotations
-* Run tests before submitting changes
-
----
-
-## 🌐 Additional Resources
-
-* [FastAPI Docs](https://fastapi.tiangolo.com/)
-* [Alembic Docs](https://alembic.sqlalchemy.org/)
-* [SQLModel Docs](https://sqlmodel.tiangolo.com/)
-* [Structlog Docs](https://www.structlog.org/)
-
----
-
+Licensed under the [MIT License](../LICENSE). Your AI. Your Rules.

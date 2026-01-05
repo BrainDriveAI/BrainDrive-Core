@@ -21,7 +21,7 @@ Follow the [Installation Guide](https://docs.braindrive.ai/core/INSTALL)
 ## Step 2: Install the Plugin Template
 
 1. Go to BrainDrive Plugin Manager → Install Plugins
-2. Enter URL: `https://github.com/BrainDriveAI/BrainDrive-PluginTemplate
+2. Enter URL: `https://github.com/BrainDriveAI/BrainDrive-PluginTemplate`
 3. Click Install
 4. Wait for green success message
 
@@ -107,7 +107,7 @@ Each bridge comes with an example plugin you can install and full documentation.
 | `API`            | Backend communication     | `await services.api.get('/data')`      | [API Example](https://github.com/BrainDriveAI/BrainDrive-API-Service-Bridge-Example-Plugin)        |
 | `Event`          | Plugin messaging          | `services.event.emit('myEvent', data)` | [Events Example](https://github.com/BrainDriveAI/BrainDrive-Events-Service-Bridge-Example-Plugin)     |
 | `Theme`          | Light/dark mode switching | `services.theme.getCurrentTheme()`     | [Theme Example](https://github.com/BrainDriveAI/BrainDrive-Theme-Service-Bridge-Example-Plugin)      |
-| `Settings`       | User preferences          | `services.settings.getSetting('myKey') | [Settings Example](https://github.com/BrainDriveAI/BrainDrive-Settings-Service-Bridge-Example-Plugin)   |
+| `Settings`       | User preferences          | `services.settings.getSetting('myKey')` | [Settings Example](https://github.com/BrainDriveAI/BrainDrive-Settings-Service-Bridge-Example-Plugin)   |
 | `Page Context`   | Current page info         | `services.pageContext.getContext()`    | [Context Example](https://github.com/BrainDriveAI/BrainDrive-Page-Context-Service-Bridge-Example-Plugin)    |
 | `Plugin State`   | Data persistence          | `services.pluginState.save(data)`      | [State Example](https://github.com/BrainDriveAI/BrainDrive-Plugin-State-Service-Bridge-Example-Plugin)      |
 
@@ -160,6 +160,6 @@ The only limit is your imagination. Your AI. Your Rules.
 - [API Documentation](http://localhost:8005/api/v1/docs) - Backend endpoints (when running locally)
 - [Report Issues](https://github.com/BrainDriveAI/BrainDrive-Core/issues) - Use `[plugin]` tag
 
-Thank you for joining us on this mission to build a superior, user-owned alterantive to Big Tech AI systems.
+Thank you for joining us on this mission to build a superior, user-owned alternative to Big Tech AI systems.
 
 Your AI. Your Rules.
