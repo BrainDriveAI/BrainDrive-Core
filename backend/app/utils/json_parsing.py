@@ -118,13 +118,8 @@ def safe_encrypted_json_parse(
             logger.info("🔑 Attempting alternative encryption keys for Ollama settings...")
             
             # Try some common encryption keys that might have been used
-            alternative_keys = [
-                'BrainDrive2025-SecureEncryption-MasterKey-RandomString-ForAPIKeys',  # From .env file
-                'your-secret-key-here',
-                'BrainDrive2025',
-                'braindrive-encryption-key',
-                'BrainDrive2025-SecureEncryption-MasterKey'
-            ]
+            # Note: This is a fallback for migration scenarios only
+            alternative_keys = []
             
             import os
             original_key = os.environ.get('ENCRYPTION_MASTER_KEY')

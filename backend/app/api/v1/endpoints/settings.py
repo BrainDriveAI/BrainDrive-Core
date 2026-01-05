@@ -9,6 +9,7 @@ from app.core.database import get_db
 from app.core.auth_deps import require_user, require_admin, optional_user
 from app.core.auth_context import AuthContext
 from app.models.settings import SettingDefinition, SettingInstance, SettingScope
+from app.services.settings_service import get_user_setting_instance, ensure_setting_instance_belongs_to_user
 from app.schemas.settings import (
     SettingDefinitionCreate,
     SettingDefinitionUpdate,
@@ -603,11 +604,9 @@ async def create_setting_instance(
                         status_code=status.HTTP_401_UNAUTHORIZED,
                         detail="Authentication required for user settings"
                     )
-                if str(instance_user_id) != str(auth.user_id):
-                    raise HTTPException(
-                        status_code=status.HTTP_403_FORBIDDEN,
-                        detail="Access denied to this setting instance"
-                    )
+                # Verify ownership
+                instance_dict = {"user_id": instance_user_id}
+                ensure_setting_instance_belongs_to_user(instance_dict, auth)
             elif instance_scope.lower() == 'system':
                 if not auth or not auth.is_admin:
                     raise HTTPException(
@@ -656,11 +655,9 @@ async def create_setting_instance(
                             status_code=status.HTTP_401_UNAUTHORIZED,
                             detail="Authentication required for user settings"
                         )
-                    if str(instance_user_id) != str(auth.user_id):
-                        raise HTTPException(
-                            status_code=status.HTTP_403_FORBIDDEN,
-                            detail="Access denied to this setting instance"
-                        )
+                    # Verify ownership
+                    instance_dict = {"user_id": instance_user_id}
+                    ensure_setting_instance_belongs_to_user(instance_dict, auth)
                 elif instance_scope.lower() == 'system':
                     if not auth or not auth.is_admin:
                         raise HTTPException(
@@ -755,21 +752,20 @@ async def create_setting_instance(
         
         # Ensure user context is set correctly
         if instance_data.scope == SettingScope.USER or instance_data.scope == SettingScope.USER_PAGE:
+            # Allow "current" keyword using auth context
+            if instance_data.user_id == "current":
+                if not auth:
+                    raise HTTPException(
+                        status_code=status.HTTP_401_UNAUTHORIZED,
+                        detail="Authentication required for user settings"
+                    )
+                logger.info(f"Resolving user_id 'current' to: {auth.user_id}")
+                instance_data.user_id = str(auth.user_id)
 
-    # Allow "current" keyword using auth context
-    if instance_data.user_id == "current":
-        if not auth:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Authentication required for user settings"
-            )
-        logger.info(f"Resolving user_id 'current' to: {auth.user_id}")
-        instance_data.user_id = str(auth.user_id)
-
-    # Auto-inject authenticated user if missing
-    if not instance_data.user_id and auth:
-        logger.info(f"Setting user_id to current user: {auth.user_id}")
-        instance_data.user_id = str(auth.user_id)
+            # Auto-inject authenticated user if missing
+            if not instance_data.user_id and auth:
+                logger.info(f"Setting user_id to current user: {auth.user_id}")
+                instance_data.user_id = str(auth.user_id)
         
         try:
             # Get the definition to validate the value and scopes using direct SQL
@@ -1222,11 +1218,8 @@ async def get_setting_instance(
                     status_code=status.HTTP_401_UNAUTHORIZED,
                     detail="Authentication required for user settings"
                 )
-            if str(instance["user_id"]) != str(auth.user_id):
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail="Access denied to this setting instance"
-                )
+            # Verify ownership using service helper
+            ensure_setting_instance_belongs_to_user(instance, auth)
         elif scope_value == SettingScope.SYSTEM.value:
             if not auth or not auth.is_admin:
                 raise HTTPException(
@@ -1295,11 +1288,8 @@ async def update_setting_instance(
                     status_code=status.HTTP_401_UNAUTHORIZED,
                     detail="Authentication required for user settings"
                 )
-            if str(instance["user_id"]) != str(auth.user_id):
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail="Access denied to this setting instance"
-                )
+            # Verify ownership using service helper
+            ensure_setting_instance_belongs_to_user(instance, auth)
         elif scope_value == SettingScope.SYSTEM.value:
             if not auth or not auth.is_admin:
                 raise HTTPException(
@@ -1426,11 +1416,8 @@ async def put_setting_instance(
                     status_code=status.HTTP_401_UNAUTHORIZED,
                     detail="Authentication required for user settings"
                 )
-            if str(instance["user_id"]) != str(auth.user_id):
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail="Access denied to this setting instance"
-                )
+            # Verify ownership using service helper
+            ensure_setting_instance_belongs_to_user(instance, auth)
         elif scope_value == SettingScope.SYSTEM.value:
             if not auth or not auth.is_admin:
                 raise HTTPException(
@@ -1568,11 +1555,8 @@ async def delete_setting_instance(
                     status_code=status.HTTP_401_UNAUTHORIZED,
                     detail="Authentication required for user settings"
                 )
-            if str(instance["user_id"]) != str(auth.user_id):
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail="Access denied to this setting instance"
-                )
+            # Verify ownership using service helper
+            ensure_setting_instance_belongs_to_user(instance, auth)
         elif scope_value == SettingScope.SYSTEM.value:
             if not auth or not auth.is_admin:
                 raise HTTPException(

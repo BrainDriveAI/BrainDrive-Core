@@ -19,6 +19,7 @@ from app.schemas.navigation import (
     NavigationRouteMove,
     NavigationRouteBatchUpdate
 )
+from app.services.navigation_service import get_user_navigation_route, ensure_route_belongs_to_user
 
 router = APIRouter()
 
@@ -94,8 +95,10 @@ async def batch_update_navigation_routes(
             if not route:
                 continue  # Skip non-existent routes
             
-            # Check permissions
-            if str(route.creator_id).replace('-', '') != str(auth.user_id).replace('-', ''):
+            # Check permissions - skip routes user doesn't own
+            try:
+                ensure_route_belongs_to_user(route, auth)
+            except HTTPException:
                 continue  # Skip routes user doesn't own
             
             # Apply updates
@@ -299,19 +302,8 @@ async def move_navigation_route(
 ):
     """Move a navigation route to a different parent or position"""
     try:
-        route = await NavigationRoute.get_by_id(db, route_id)
-        if not route:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Navigation route not found"
-            )
-        
-        # Check permissions
-        if str(route.creator_id).replace('-', '') != str(auth.user_id).replace('-', ''):
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="You don't have permission to modify this route"
-            )
+        # Get route and ensure it belongs to current user
+        route = await get_user_navigation_route(db, route_id, auth)
         
         # Move the route
         await route.move_to_parent(db, move_data.parent_id, move_data.display_order)

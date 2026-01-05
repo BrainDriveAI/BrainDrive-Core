@@ -15,6 +15,7 @@ from app.core.security import (
 )
 from app.core.auth_deps import require_user
 from app.core.auth_context import AuthContext
+from app.core.rate_limit_deps import rate_limit_ip, rate_limit_user
 from app.models.user import User
 from app.schemas.user import UserCreate, UserLogin, UserResponse
 import logging
@@ -194,7 +195,11 @@ def log_token_validation(token: str, user_id: str, source: str, result: str):
 
 
 @router.post("/register", response_model=UserResponse)
-async def register(user_data: UserCreate, db: AsyncSession = Depends(get_db)):
+async def register(
+    user_data: UserCreate,
+    db: AsyncSession = Depends(get_db),
+    _: None = Depends(rate_limit_ip(limit=3, window_seconds=3600))
+):
     """Register a new user and initialize their data."""
     try:
         # Check if user already exists
@@ -261,7 +266,10 @@ async def register(user_data: UserCreate, db: AsyncSession = Depends(get_db)):
 
 @router.post("/login")
 async def login(
-    user_data: UserLogin, response: Response, db: AsyncSession = Depends(get_db)
+    user_data: UserLogin,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+    _: None = Depends(rate_limit_ip(limit=5, window_seconds=300))
 ):
     """Login user and return access token."""
     try:
@@ -405,7 +413,10 @@ async def login(
 
 @router.post("/refresh")
 async def refresh_token(
-    response: Response, request: Request, db: AsyncSession = Depends(get_db)
+    response: Response,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    _: None = Depends(rate_limit_ip(limit=10, window_seconds=300))
 ):
     """Refresh access token using a valid refresh token from HTTP-only cookie."""
     # EMERGENCY FIX: Wrap the entire function in a try-except block to ensure it always returns a response

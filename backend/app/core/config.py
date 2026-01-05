@@ -53,6 +53,16 @@ class Settings(BaseSettings):
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
     REFRESH_TOKEN_EXPIRE_DAYS: int = 30
     ALGORITHM: str = "HS256"
+    
+    # Rate Limiting & Request Size
+    MAX_REQUEST_SIZE: int = 5 * 1024 * 1024  # 5MB for JSON bodies
+    
+    # Service Authentication
+    # Static bearer tokens for service-to-service auth
+    # Generate secure tokens: python -c "import secrets; print(secrets.token_urlsafe(32))"
+    PLUGIN_RUNTIME_TOKEN: str = ""  # For plugin runtime service calls
+    JOB_WORKER_TOKEN: str = ""  # For background job worker callbacks
+    PLUGIN_LIFECYCLE_TOKEN: str = ""  # For plugin lifecycle operations
 
     # Database
     DATABASE_URL: str = "sqlite:///braindrive.db"

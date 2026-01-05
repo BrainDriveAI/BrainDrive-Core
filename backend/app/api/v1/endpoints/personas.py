@@ -102,14 +102,8 @@ async def get_persona(
 ):
     """Get a specific persona by ID."""
     try:
-        db_persona = await PersonaService.get_persona_by_id(
-            db=db,
-            persona_id=persona_id,
-            user_id=str(auth.user_id)
-        )
-        
-        if not db_persona:
-            raise HTTPException(status_code=404, detail="Persona not found")
+        # Get persona and ensure it belongs to current user
+        db_persona = await PersonaService.get_user_persona(db, persona_id, auth)
         
         # Parse persona for response
         persona_dict = PersonaService.parse_persona_response(db_persona)

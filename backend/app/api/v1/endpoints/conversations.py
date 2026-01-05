@@ -21,6 +21,8 @@ from app.schemas.conversation_schemas import (
     Message as MessageSchema,
     MessageCreate
 )
+from app.services.conversation_service import get_user_conversation, ensure_user_id_matches
+from app.services.persona_service import PersonaService
 
 router = APIRouter()
 
@@ -38,13 +40,8 @@ async def get_user_conversations(
     auth: AuthContext = Depends(require_user)
 ):
     """Get all conversations for a specific user."""
-    # Format user_id to ensure consistency (remove dashes if present)
-    formatted_user_id = user_id.replace('-', '')
-    current_user_id = str(auth.user_id).replace('-', '')
-    
     # Ensure the current user can only access their own conversations
-    if current_user_id != formatted_user_id:
-        raise HTTPException(status_code=403, detail="Not authorized to access these conversations")
+    formatted_user_id = ensure_user_id_matches(user_id, auth)
     
     # Base query
     from sqlalchemy import select
@@ -128,17 +125,8 @@ async def get_conversation(
     auth: AuthContext = Depends(require_user)
 ):
     """Get a specific conversation."""
-    conversation = await Conversation.get_by_id(db, conversation_id)
-    if not conversation:
-        raise HTTPException(status_code=404, detail="Conversation not found")
-    
-    # Ensure the current user can only access their own conversations
-    # Format user IDs to ensure consistency (remove dashes if present)
-    conversation_user_id = str(conversation.user_id).replace('-', '')
-    current_user_id = str(auth.user_id).replace('-', '')
-    
-    if conversation_user_id != current_user_id:
-        raise HTTPException(status_code=403, detail="Not authorized to access this conversation")
+    # Get conversation and ensure it belongs to current user
+    conversation = await get_user_conversation(db, conversation_id, auth)
     
     # Get tags for the conversation
     tags = await conversation.get_tags(db)
@@ -158,17 +146,8 @@ async def update_conversation(
     auth: AuthContext = Depends(require_user)
 ):
     """Update a conversation's metadata."""
-    conversation = await Conversation.get_by_id(db, conversation_id)
-    if not conversation:
-        raise HTTPException(status_code=404, detail="Conversation not found")
-    
-    # Ensure the current user can only update their own conversations
-    # Format user IDs to ensure consistency (remove dashes if present)
-    conversation_user_id = str(conversation.user_id).replace('-', '')
-    current_user_id = str(auth.user_id).replace('-', '')
-    
-    if conversation_user_id != current_user_id:
-        raise HTTPException(status_code=403, detail="Not authorized to update this conversation")
+    # Get conversation and ensure it belongs to current user
+    conversation = await get_user_conversation(db, conversation_id, auth)
     
     # Update conversation fields
     if conversation_update.title is not None:
@@ -206,17 +185,8 @@ async def delete_conversation(
     auth: AuthContext = Depends(require_user)
 ):
     """Delete a conversation and all its messages."""
-    conversation = await Conversation.get_by_id(db, conversation_id)
-    if not conversation:
-        raise HTTPException(status_code=404, detail="Conversation not found")
-    
-    # Ensure the current user can only delete their own conversations
-    # Format user IDs to ensure consistency (remove dashes if present)
-    conversation_user_id = str(conversation.user_id).replace('-', '')
-    current_user_id = str(auth.user_id).replace('-', '')
-    
-    if conversation_user_id != current_user_id:
-        raise HTTPException(status_code=403, detail="Not authorized to delete this conversation")
+    # Get conversation and ensure it belongs to current user
+    conversation = await get_user_conversation(db, conversation_id, auth)
     
     await db.delete(conversation)
     await db.commit()
@@ -236,14 +206,7 @@ async def get_conversation_messages(
     if not conversation:
         raise HTTPException(status_code=404, detail="Conversation not found")
     
-    # Ensure the current user can only access their own conversations
-    # Format user IDs to ensure consistency (remove dashes if present)
-    conversation_user_id = str(conversation.user_id).replace('-', '')
-    current_user_id = str(auth.user_id).replace('-', '')
-    
-    if conversation_user_id != current_user_id:
-        raise HTTPException(status_code=403, detail="Not authorized to access this conversation")
-    
+    # Ownership check done by get_user_conversation helper
     messages = await Message.get_by_conversation_id(db, conversation_id, skip, limit)
     return messages
 
@@ -260,14 +223,7 @@ async def create_message(
     if not conversation:
         raise HTTPException(status_code=404, detail="Conversation not found")
     
-    # Ensure the current user can only add messages to their own conversations
-    # Format user IDs to ensure consistency (remove dashes if present)
-    conversation_user_id = str(conversation.user_id).replace('-', '')
-    current_user_id = str(auth.user_id).replace('-', '')
-    
-    if conversation_user_id != current_user_id:
-        raise HTTPException(status_code=403, detail="Not authorized to add messages to this conversation")
-    
+    # Ownership check done by get_user_conversation helper
     db_message = Message(
         id=str(uuid.uuid4()),  # Generate ID with dashes
         conversation_id=conversation_id,  # Use conversation_id as provided
@@ -298,14 +254,7 @@ async def get_conversation_with_messages(
     if not conversation:
         raise HTTPException(status_code=404, detail="Conversation not found")
     
-    # Ensure the current user can only access their own conversations
-    # Format user IDs to ensure consistency (remove dashes if present)
-    conversation_user_id = str(conversation.user_id).replace('-', '')
-    current_user_id = str(auth.user_id).replace('-', '')
-    
-    if conversation_user_id != current_user_id:
-        raise HTTPException(status_code=403, detail="Not authorized to access this conversation")
-    
+    # Ownership check done by get_user_conversation helper
     messages = await Message.get_by_conversation_id(db, conversation_id, skip, limit)
     
     # Get tags for the conversation
@@ -328,18 +277,9 @@ async def get_conversation_with_persona(
     """Get a conversation with full persona details."""
     from app.schemas.conversation_schemas import ConversationWithPersona
     from app.models.persona import Persona
-    from app.services.persona_service import PersonaService
     
-    conversation = await Conversation.get_by_id(db, conversation_id)
-    if not conversation:
-        raise HTTPException(status_code=404, detail="Conversation not found")
-    
-    # Ensure the current user can only access their own conversations
-    conversation_user_id = str(conversation.user_id).replace('-', '')
-    current_user_id = str(auth.user_id).replace('-', '')
-    
-    if conversation_user_id != current_user_id:
-        raise HTTPException(status_code=403, detail="Not authorized to access this conversation")
+    # Get conversation and ensure it belongs to current user
+    conversation = await get_user_conversation(db, conversation_id, auth)
     
     # Get tags for the conversation
     tags = await conversation.get_tags(db)
@@ -348,10 +288,11 @@ async def get_conversation_with_persona(
     persona = None
     if conversation.persona_id:
         try:
-            persona = await Persona.get_by_id(db, conversation.persona_id)
-            # Ensure the persona belongs to the same user
-            if persona and str(persona.user_id).replace('-', '') != current_user_id:
-                persona = None  # Don't return persona if it doesn't belong to the user
+            # Ensure persona belongs to current user (graceful degradation if not)
+            persona = await PersonaService.get_user_persona(db, conversation.persona_id, auth)
+        except HTTPException:
+            # Persona doesn't belong to user - gracefully return None
+            persona = None
         except Exception as e:
             # Log error but don't fail the request - graceful degradation
             import logging
@@ -380,32 +321,16 @@ async def update_conversation_persona(
     auth: AuthContext = Depends(require_user)
 ):
     """Update a conversation's persona."""
-    from app.models.persona import Persona
-    
     # Extract persona_id from request body
     persona_id = request_body.get("persona_id")
     
-    conversation = await Conversation.get_by_id(db, conversation_id)
-    if not conversation:
-        raise HTTPException(status_code=404, detail="Conversation not found")
-    
-    # Ensure the current user can only update their own conversations
-    conversation_user_id = str(conversation.user_id).replace('-', '')
-    current_user_id = str(auth.user_id).replace('-', '')
-    
-    if conversation_user_id != current_user_id:
-        raise HTTPException(status_code=403, detail="Not authorized to update this conversation")
+    # Get conversation and ensure it belongs to current user
+    conversation = await get_user_conversation(db, conversation_id, auth)
     
     # Validate persona ownership if persona_id is provided
     if persona_id:
-        persona = await Persona.get_by_id(db, persona_id)
-        if not persona:
-            raise HTTPException(status_code=404, detail="Persona not found")
-        
-        # Ensure the persona belongs to the same user
-        persona_user_id = str(persona.user_id).replace('-', '')
-        if persona_user_id != current_user_id:
-            raise HTTPException(status_code=403, detail="Not authorized to use this persona")
+        # Ensure persona belongs to current user
+        await PersonaService.get_user_persona(db, persona_id, auth)
     
     # Update conversation persona
     conversation.persona_id = persona_id
@@ -432,20 +357,10 @@ async def get_conversations_by_persona(
     auth: AuthContext = Depends(require_user)
 ):
     """Get all conversations for a specific persona."""
-    from app.models.persona import Persona
     from sqlalchemy import select
     
     # Verify persona exists and belongs to current user
-    persona = await Persona.get_by_id(db, persona_id)
-    if not persona:
-        raise HTTPException(status_code=404, detail="Persona not found")
-    
-    # Ensure the current user can only access their own persona's conversations
-    persona_user_id = str(persona.user_id).replace('-', '')
-    current_user_id = str(auth.user_id).replace('-', '')
-    
-    if persona_user_id != current_user_id:
-        raise HTTPException(status_code=403, detail="Not authorized to access this persona's conversations")
+    await PersonaService.get_user_persona(db, persona_id, auth)
     
     # Query conversations for this persona
     query = select(Conversation).where(

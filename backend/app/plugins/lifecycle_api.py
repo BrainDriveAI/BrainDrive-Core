@@ -490,7 +490,7 @@ async def start_plugin_service(
     plugin_slug: str,
     background_tasks: BackgroundTasks,
     payload: dict = Body(...),
-    current_user: User = Depends(get_current_user),
+    auth: AuthContext = Depends(require_user),
 ):
     """
     Start one or all plugin services.
@@ -504,13 +504,13 @@ async def start_plugin_service(
 
     if user_id:
         if user_id == "current":
-            if not current_user:
+            if not auth:
                 logger.warning("User ID 'current' specified but no current user available")
                 return []
-            user_id = str(current_user.id)
+            user_id = str(auth.user_id)
             logger.info(f"Using current user ID: {user_id}")
-        elif current_user:
-            if str(current_user.id) != str(user_id):
+        elif auth:
+            if str(auth.user_id) != str(user_id):
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail="Cannot access settings for another user"
@@ -544,7 +544,7 @@ async def stop_plugin_service(
     plugin_slug: str,
     background_tasks: BackgroundTasks,
     payload: dict = Body(...),
-    current_user: User = Depends(get_current_user),
+    auth: AuthContext = Depends(require_user),
 ):
     """
     Stop one or all plugin services.
@@ -556,13 +556,13 @@ async def stop_plugin_service(
 
     if user_id:
         if user_id == "current":
-            if not current_user:
+            if not auth:
                 logger.warning("User ID 'current' specified but no current user available")
                 return []
-            user_id = str(current_user.id)
+            user_id = str(auth.user_id)
             logger.info(f"Using current user ID: {user_id}")
-        elif current_user:
-            if str(current_user.id) != str(user_id):
+        elif auth:
+            if str(auth.user_id) != str(user_id):
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail="Cannot access settings for another user"

@@ -14,6 +14,7 @@ from app.core.auth_deps import require_user
 from app.core.auth_context import AuthContext
 from app.models.user import User
 from app.models.plugin_state import PluginState, PluginStateHistory, PluginStateConfig
+from app.services.plugin_state_service import get_user_plugin_state
 from app.schemas.plugin_state import (
     PluginStateCreate,
     PluginStateUpdate,
@@ -215,20 +216,8 @@ async def get_plugin_state(
 ):
     """Get a specific plugin state by ID."""
     try:
-        stmt = select(PluginState).where(
-            and_(
-                PluginState.id == state_id,
-                PluginState.user_id == auth.user_id
-            )
-        )
-        result = await db.execute(stmt)
-        state = result.scalar_one_or_none()
-        
-        if not state:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Plugin state not found"
-            )
+        # Get plugin state and ensure it belongs to current user
+        state = await get_user_plugin_state(db, state_id, auth)
         
         # Update access tracking
         state.last_accessed = datetime.utcnow()
@@ -263,20 +252,8 @@ async def update_plugin_state(
 ):
     """Update a plugin state record."""
     try:
-        stmt = select(PluginState).where(
-            and_(
-                PluginState.id == state_id,
-                PluginState.user_id == auth.user_id
-            )
-        )
-        result = await db.execute(stmt)
-        state = result.scalar_one_or_none()
-        
-        if not state:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Plugin state not found"
-            )
+        # Get plugin state and ensure it belongs to current user
+        state = await get_user_plugin_state(db, state_id, auth)
         
         # Store old data for history
         old_data = decompress_state_data(state.state_data, state.compression_type)
@@ -338,20 +315,8 @@ async def delete_plugin_state(
 ):
     """Delete a plugin state record."""
     try:
-        stmt = select(PluginState).where(
-            and_(
-                PluginState.id == state_id,
-                PluginState.user_id == auth.user_id
-            )
-        )
-        result = await db.execute(stmt)
-        state = result.scalar_one_or_none()
-        
-        if not state:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Plugin state not found"
-            )
+        # Get plugin state and ensure it belongs to current user
+        state = await get_user_plugin_state(db, state_id, auth)
         
         # Store data for history before deletion
         state_data = decompress_state_data(state.state_data, state.compression_type)

@@ -12,6 +12,7 @@ from app.core.database import get_db
 from app.core.job_manager_provider import get_job_manager
 from app.core.auth_deps import require_user
 from app.core.auth_context import AuthContext
+from app.core.rate_limit_deps import rate_limit_user
 from app.models.job import Job, JobStatus
 from app.models.settings import SettingDefinition, SettingScope
 from app.models.user import User
@@ -245,7 +246,8 @@ async def stream_response(response: httpx.Response) -> AsyncGenerator[bytes, Non
 @router.post("/passthrough")
 async def ollama_passthrough(
     request_data: Dict[str, Any] = Body(...),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    auth: AuthContext = Depends(require_user)
 ):
     """
     Generic passthrough for Ollama API requests (non-streaming)
@@ -499,6 +501,7 @@ async def install_ollama_model(
     request: ModelInstallRequest,
     auth: AuthContext = Depends(require_user),
     job_manager: JobManager = Depends(get_job_manager),
+    _: None = Depends(rate_limit_user(limit=10, window_seconds=60))
 ):
     """Enqueue a model installation using the background job system."""
     server_base = normalize_server_base(request.server_url)

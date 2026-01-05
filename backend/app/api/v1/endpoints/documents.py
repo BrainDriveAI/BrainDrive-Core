@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.core.auth_deps import require_user
 from app.core.auth_context import AuthContext
+from app.core.rate_limit_deps import rate_limit_user
 from app.models.user import User
 from app.services.documents import (
     ExtractionOptions,
@@ -67,6 +68,7 @@ async def process_document(
     strip_boilerplate: bool = Query(True, description="Strip boilerplate for HTML inputs"),
     db: AsyncSession = Depends(get_db),
     auth: AuthContext = Depends(require_user),
+    _: None = Depends(rate_limit_user(limit=20, window_seconds=60))
 ):
     options = ExtractionOptions(
         preserve_layout=preserve_layout,
@@ -108,6 +110,7 @@ async def process_multiple_documents(
     strip_boilerplate: bool = Query(True),
     db: AsyncSession = Depends(get_db),
     auth: AuthContext = Depends(require_user),
+    _: None = Depends(rate_limit_user(limit=10, window_seconds=60))
 ):
     if not files:
         raise HTTPException(status_code=400, detail="No files provided")
@@ -167,6 +170,7 @@ async def process_text_context(
     file: UploadFile = File(...),
     db: AsyncSession = Depends(get_db),
     auth: AuthContext = Depends(require_user),
+    _: None = Depends(rate_limit_user(limit=20, window_seconds=60))
 ):
     try:
         data = await file.read()

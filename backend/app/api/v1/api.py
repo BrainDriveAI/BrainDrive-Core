@@ -1,5 +1,6 @@
 from fastapi import APIRouter
 from app.api.v1.endpoints import auth, settings, ollama, ai_providers, ai_provider_settings, navigation_routes, components, conversations, tags, personas, plugin_state, demo, searxng, documents, jobs, diagnostics
+from app.api.v1.internal import internal_router
 from app.routers import plugins
 from app.routes.pages import router as pages_router
 
@@ -24,3 +25,6 @@ api_router.include_router(diagnostics.router, tags=["diagnostics"])
 # Include the plugins router (which already includes the lifecycle router)
 api_router.include_router(plugins.router, tags=["plugins"])
 api_router.include_router(pages_router)
+
+# Internal endpoints (service-to-service, not in OpenAPI schema)
+api_router.include_router(internal_router)
