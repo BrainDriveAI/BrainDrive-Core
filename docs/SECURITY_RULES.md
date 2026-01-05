@@ -77,19 +77,6 @@ async def flexible_endpoint(auth: Optional[AuthContext] = Depends(optional_user)
 
 ---
 
-## Implemented in Phase 1.0
-
-These rules are enforced by the security patterns implemented in Phase 1.0 of the Initial Security Roadmap (see `InitialSecurity.md`).
-
-- **Phase 1.0.1-1.0.2:** `AuthContext` and centralized auth dependencies
-- **Phase 1.0.3:** Removed direct `oauth2_scheme` usage from routers
-- **Phase 1.0.4:** Real admin evaluation (no hardcoded `is_admin=True`)
-- **Phase 1.0.5:** Ownership scoping helpers (service layer)
-- **Phase 1.0.6:** Router-level enforcement
-- **Phase 1.0.7:** Guardrails (this document + automated checks)
-
----
-
 ## Quick Reference
 
 | Need | Use This | Location |
@@ -101,5 +88,4 @@ These rules are enforced by the security patterns implemented in Phase 1.0 of th
 
 ---
 
-**Last Updated:** Phase 1.0.7 Implementation
 
