@@ -1,8 +1,6 @@
 #!/usr/bin/env python3
 """
 Security pattern validation guard for BrainDrive.
-
-This script implements the guardrails from InitialSecurity.md Step 1.0.7.
 Run this before commits or in CI to prevent security regressions.
 
 Exit codes:
@@ -18,7 +16,7 @@ def check_oauth2_scheme_usage():
     """
     Ensure oauth2_scheme is only used in the auth dependency module.
     
-    Per InitialSecurity.md Step 1.0.7:
+    
     "Add a simple CI/test guard: fail if oauth2_scheme is used outside 
     the auth dependency module."
     """
@@ -79,7 +77,7 @@ def main():
     """Run all security checks."""
     print("=" * 80)
     print("BrainDrive Security Pattern Validation")
-    print("Phase 1.0.7 Guardrails")
+    print("Phase Checked")
     print("=" * 80)
     print()
     
