@@ -56,15 +56,15 @@ Phase 1 is complete when you can install BrainDrive, reach the chat window, type
 
 **Key Deliverables:**
 
-* **Installers** 1-click install for Windows, MacOS and Linux
-* **Cross-platform installation guide** for developers that works seamlessly on Linux, Windows, and macOS  
+* **Installers** 1-click install for Windows and MacOS.
+* **Cross-platform CLI installation guide** for developers that works seamlessly on Linux, Windows, and macOS  
 * **Ollama integration** with GUI-based model management. Download Ollama and add/remove open source models in BrainDrive, no terminal required.  
 * **Default AI Chat plugin** included with BrainDrive-Core install as the first example of a plugin-driven experience
 
 **Where we’re at:**
 
 - **Done:** We have completed the cross-platform installation guide, Ollama Integration, and Default AI chat plugins. Ollama and AI Chat plugin install with BrainDrive-Core by default, and can be easily removed with 1 click.
-- **In Progress** 1-click install for Windows, macOS, and Linux
+- **In Progress** 1-click install for Windows and MacOS.
 
 **Community Calls to Action:**
 
@@ -115,13 +115,13 @@ Phase 2 is about getting the word out & building on the foundation laid in phase
 
 **Where We’re At:**
 
-* First draft of Persona’s, Page Builder, Open Router, Chat w/ Documents
+* Documentation site, persona system, page builder improvements, OpenRouter Plugin all live. RAG system about to be released for Linux and Windows with Mac coming soon after. 
 
 **Community Calls to Action:**
 
 * **Test BrainDrive** and [provide feedback](https://community.braindrive.ai/t/have-braindrive-feedback-for-us-post-it-here/104).
 * **Identify and report bugs** across BrainDrive-Core and Default plugins   
-* **Build persona-based experiences** and share them  
+* **Build persona-based experiences** and share them in the community forums.
 * **Contribute to BrainDrive’s first 3 community plugins**  
 * **Improve documentation** based on your learning journey
 
