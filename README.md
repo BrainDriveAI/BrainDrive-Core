@@ -79,46 +79,39 @@ Build for yourself, build for the user-owned AI community, build for customers. 
 ## Architecture
 
 ```mermaid
-flowchart TB
+flowchart LR
     subgraph Core ["BrainDrive Core"]
-        subgraph FE ["Frontend (React + TypeScript)"]
-            UI[Page Builder / Chat UI]
-            SB[Service Bridges]
-        end
-        subgraph BE ["Backend (Python + FastAPI)"]
-            API[REST API]
-            LM[Lifecycle Manager]
-            DB[(SQLite)]
-        end
+        direction TB
+        UI[Page Builder / Chat UI]
+        SB[Service Bridges]
+        API[REST API]
+        LM[Lifecycle Manager]
+        DB[(SQLite)]
+        UI --> SB
+        SB --> API
+        API --> DB
+        LM --> DB
     end
 
-    subgraph Plugins ["Plugin Ecosystem (Separate Repos)"]
-        P1[Chat Plugin]
-        P2[Ollama Plugin]
-        P3[Settings Plugin]
+    subgraph Plugins ["Plugins"]
+        direction TB
+        P1[Chat]
+        P2[Ollama]
+        P3[Settings]
         P4[Your Plugin]
     end
 
-    subgraph External ["External Services"]
+    subgraph Ext ["External"]
         AI[AI Providers]
     end
 
-    UI --> SB
-    SB --> API
-    API --> DB
-    LM --> DB
-
-    SB -.->|Module Federation| P1
-    SB -.->|Module Federation| P2
-    SB -.->|Module Federation| P3
-    SB -.->|Module Federation| P4
-
-    P2 --> AI
+    SB -.->|Module Federation| Plugins
     P1 --> API
+    P2 --> AI
 
     style Core fill:#1a1a2e,stroke:#4a4a6a,color:#fff
     style Plugins fill:#16213e,stroke:#4a4a6a,color:#fff
-    style External fill:#0f3460,stroke:#4a4a6a,color:#fff
+    style Ext fill:#0f3460,stroke:#4a4a6a,color:#fff
 ```
 
 **Core System** (this repo):
