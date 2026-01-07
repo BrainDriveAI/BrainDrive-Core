@@ -16,7 +16,7 @@ By the end of this guide you will be able to:
 
 ## Step 1: Install BrainDrive
 
-Follow the [Installation Guide](https://docs.braindrive.ai/core/INSTALL)
+Follow the [Installation Guide](https://docs.braindrive.ai/core/getting-started/install)
 
 ## Step 2: Install the Plugin Template
 
@@ -29,7 +29,7 @@ Follow the [Installation Guide](https://docs.braindrive.ai/core/INSTALL)
 
 ## Step 3: Test the Template
 
-1. Go to BrainDrive Page Builder 
+1. Go to BrainDrive Page Builder
 2. Create New Page
 3. Drag "Plugin Template" from left panel to canvas
 4. Click Publish
@@ -51,7 +51,7 @@ npm install
 
 1. **Find your BrainDrive backend path:**
    - Look for: `[your-braindrive-path]/backend/plugins/shared/`
-   
+
 2. **Update webpack config:**
    - Open `webpack.config.js`
    - Find the commented webpack output path
@@ -88,7 +88,7 @@ npm install
    - Your change appears immediately in BrainDrive
    - No reinstallation needed
 
-**You've just experienced the 1-minute development cycle!** 
+**You've just experienced the 1-minute development cycle!**
 
 ## Step 6: Understand Service Bridges (The BrainDrive Secret Sauce)
 
@@ -100,7 +100,7 @@ npm install
 
 ## Available Bridges
 
-Each bridge comes with an example plugin you can install and full documentation. 
+Each bridge comes with an example plugin you can install and full documentation.
 
 | **Bridge**       | **Purpose**               | **Example Use**                        | **Learn by Doing**     |
 |------------------|---------------------------|----------------------------------------|-------------------------|
@@ -116,7 +116,7 @@ Each bridge comes with an example plugin you can install and full documentation.
 
 See the complete [Lifecycle Manager Customization Guide](https://github.com/BrainDriveAI/PluginTemplate/blob/main/references/LIFECYCLE_MANAGER_CUSTOMIZATION_GUIDE.md) for all customization options.
 
-Pick a bridge, test a simple use case, and *actually* build something. Don’t overthink it. If the abstraction doesn’t make sense, isolate it. If it does, use it and move on.
+Pick a bridge, test a simple use case, and *actually* build something. Don't overthink it. If the abstraction doesn't make sense, isolate it. If it does, use it and move on.
 
 **Recommended first projects:**
 
@@ -145,7 +145,7 @@ this.props.services.event.emit('dataUpdate', { newValue: 42 });
 
 ## Step 8: Bring your AI powered ideas to life
 
-The only limit is your imagination. Your AI. Your Rules. 
+The only limit is your imagination. Your AI. Your Rules.
 
 ### Dave J's Rules for Success
 

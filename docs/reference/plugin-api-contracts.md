@@ -438,6 +438,6 @@ The `remoteEntry.js` file is what BrainDrive loads to access your plugin's compo
 ## Related Documentation
 
 - [How BrainDrive Plugins Work](/core/concepts/plugins) - Conceptual overview
-- [Plugin Developer Quickstart](/core/getting-started/plugin-developer-quickstart) - Step-by-step guide
+- [Plugin Developer Quickstart](/core/plugin-development/quickstart) - Step-by-step guide
 - [Service Bridges API](./service-bridges-api.md) - Frontend TypeScript interfaces
 - [Backend REST API](./backend-api.md) - Complete endpoint reference

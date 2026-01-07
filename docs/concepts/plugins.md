@@ -2,7 +2,7 @@
 
 This document provides a comprehensive overview of the BrainDrive plugin system. It's designed to help you understand how plugins integrate with BrainDrive, whether you're evaluating the platform or preparing to build your own plugin.
 
-> **Ready to start building?** This guide covers concepts. For hands-on development, see the [Plugin Developer Quickstart](https://docs.braindrive.ai/core/getting-started/plugin-developer-quickstart).
+> **Ready to start building?** This guide covers concepts. For hands-on development, see the [Plugin Developer Quickstart](https://docs.braindrive.ai/core/plugin-development/quickstart).
 
 ## Table of Contents
 
@@ -259,7 +259,7 @@ This eliminates the 10+ minute cycle of uninstalling and reinstalling the plugin
 - Check backend console for lifecycle manager logs
 - Use Service Bridges for consistent interaction patterns
 
-For detailed development instructions, see the [Plugin Developer Quickstart](https://docs.braindrive.ai/core/getting-started/plugin-developer-quickstart).
+For detailed development instructions, see the [Plugin Developer Quickstart](https://docs.braindrive.ai/core/plugin-development/quickstart).
 
 ## Plugin Manifest
 
@@ -436,7 +436,7 @@ The Marketplace is where the community discovers and discusses plugins. Include:
 | Resource | Description |
 |----------|-------------|
 | [Plugin Template](https://github.com/BrainDriveAI/BrainDrive-PluginTemplate) | Official starter template with examples |
-| [Plugin Developer Quickstart](https://docs.braindrive.ai/core/getting-started/plugin-developer-quickstart) | Step-by-step development guide |
+| [Plugin Developer Quickstart](https://docs.braindrive.ai/core/plugin-development/quickstart) | Step-by-step development guide |
 | [Service Bridges Guide](https://docs.braindrive.ai/core/how-to/use-service-bridges) | Detailed service bridge documentation |
 | [BrainDrive Documentation](https://docs.braindrive.ai) | Comprehensive guides and references |
 | [Community Forum](https://community.braindrive.ai) | Get help and share ideas |

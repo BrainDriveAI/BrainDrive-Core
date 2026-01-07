@@ -118,7 +118,7 @@ Once running:
 
 ## Contributing
 
-Interested in developing plugins or contributing to BrainDrive? See the [Plugin Developer Quickstart](https://docs.braindrive.ai/core/getting-started/plugin-developer-quickstart).
+Interested in developing plugins or contributing to BrainDrive? See the [Plugin Developer Quickstart](https://docs.braindrive.ai/core/plugin-development/quickstart).
 
 When contributing to the backend:
 - Follow PEP8 and use type hints

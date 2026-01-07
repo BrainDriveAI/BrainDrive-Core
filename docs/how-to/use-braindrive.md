@@ -89,7 +89,7 @@ To use OpenRouter models in your BrainDrive:
 * Use the BrainDrive OpenRouter plugin as a template for building another API model serving plugin for the provider of your choice.
 * Keep your plugin private or share with the BrainDrive community via the plugin marketplace.
 
-See [plugin developer quickstart guide here](https://docs.braindrive.ai/core/getting-started/plugin-developer-quickstart).
+See [plugin developer quickstart guide here](https://docs.braindrive.ai/core/plugin-development/quickstart).
 
 ## Building Your First Custom Page
 
@@ -169,7 +169,7 @@ BrainDrive's decoupled modular architecture is designed so that you can make you
 * **Combine** blocks (multiple plugins working together)
 * **Share blocks** (distribute through marketplace or independently)
 
-Ready to get started building? Be up and running in minutes with BrainDrive's [Plugin Developer Quickstart Guide](https://docs.braindrive.ai/core/getting-started/plugin-developer-quickstart).
+Ready to get started building? Be up and running in minutes with BrainDrive's [Plugin Developer Quickstart Guide](https://docs.braindrive.ai/core/plugin-development/quickstart).
 
 ## **Community and Ecosystem**
 
