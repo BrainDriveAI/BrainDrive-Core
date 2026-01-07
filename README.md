@@ -87,10 +87,12 @@ flowchart LR
         API[REST API]
         LM[Lifecycle Manager]
         DB[(SQLite)]
+
         UI --> SB
+        UI --> API
         SB --> API
+        API --> LM
         API --> DB
-        LM --> DB
     end
 
     subgraph Plugins ["Plugins"]
@@ -105,7 +107,7 @@ flowchart LR
         AI[AI Providers]
     end
 
-    SB -.->|Module Federation| Plugins
+    UI -.->|Loads via Module Federation| Plugins
     P1 --> API
     P2 --> AI
 
