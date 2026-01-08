@@ -347,7 +347,7 @@ Once your plugin works, you can share it with others.
 
 > **Developer Tip**
 >
-> For build automation scripts, check out community resources like [Dave's plugin scripts](https://github.com/ideavault-hub/scripts) which include helpers for building and archiving plugins.
+> For build automation scripts, check out community resources like [Dave's plugin scripts](https://github.com/DJJones66/BrainDriveScripts)) which include helpers for building and archiving plugins.
 
 ---
 
