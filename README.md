@@ -79,41 +79,52 @@ Build for yourself, build for the user-owned AI community, build for customers. 
 ## Architecture
 
 ```mermaid
-flowchart LR
+flowchart TB
     subgraph Core ["BrainDrive Core"]
-        direction TB
-        UI[Page Builder / Chat UI]
-        SB[Service Bridges]
-        API[REST API]
-        LM[Lifecycle Manager]
-        DB[(SQLite)]
+        subgraph Frontend ["Frontend"]
+            direction LR
+            PB[Page Builder]
+            DASH[Dashboard]
+            PERS[Personas]
+            SET[Settings]
+            AUTH[Authentication]
+            JOBS[Jobs Manager]
+        end
 
-        UI --> SB
-        UI --> API
+        SB[Service Bridges]
+
+        subgraph Backend ["Backend (FastAPI)"]
+            direction LR
+            API[REST API]
+            LCAPI[Lifecycle API]
+            AIPROV[AI Providers]
+            DB[(SQLite)]
+        end
+
+        Frontend --> SB
+        Frontend -.->|Direct Access| API
         SB --> API
-        API --> LM
         API --> DB
+        API --> AIPROV
     end
 
     subgraph Plugins ["Plugins"]
         direction TB
-        P1[Chat]
-        P2[Ollama]
-        P3[Settings]
+        P1[Chat Plugin]
+        P2[Ollama Plugin]
+        P3[Settings Plugin]
         P4[Your Plugin]
+        LM[Lifecycle Manager]
     end
 
-    subgraph Ext ["External"]
-        AI[AI Providers]
-    end
-
-    UI -.->|Loads via Module Federation| Plugins
-    P1 --> API
-    P2 --> AI
+    Frontend -.->|Loads via Module Federation| Plugins
+    Plugins --> SB
+    LM --> LCAPI
 
     style Core fill:#1a1a2e,stroke:#4a4a6a,color:#fff
+    style Frontend fill:#2a2a4e,stroke:#4a4a6a,color:#fff
+    style Backend fill:#2a2a4e,stroke:#4a4a6a,color:#fff
     style Plugins fill:#16213e,stroke:#4a4a6a,color:#fff
-    style Ext fill:#0f3460,stroke:#4a4a6a,color:#fff
 ```
 
 **Core System** (this repo):
