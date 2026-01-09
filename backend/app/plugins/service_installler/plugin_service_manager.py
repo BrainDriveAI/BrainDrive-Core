@@ -43,6 +43,27 @@ def _resolve_services_runtime_dir() -> Path:
 
 RUNTIME_BASE = _resolve_services_runtime_dir()
 
+
+def _resolve_plugins_root() -> Path:
+    backend_root = Path(__file__).resolve().parents[3]
+    return (backend_root / "plugins").resolve()
+
+
+def resolve_service_ops_path(plugin_slug: str, plugin_version: Optional[str] = None) -> Optional[Path]:
+    plugin_slug = str(plugin_slug or "").strip()
+    if not plugin_slug:
+        return None
+    plugins_root = _resolve_plugins_root()
+    candidates: List[Path] = []
+    if plugin_version:
+        candidates.append(plugins_root / "shared" / plugin_slug / f"v{plugin_version}" / "service_ops.py")
+    candidates.append(plugins_root / "shared" / plugin_slug / "service_ops.py")
+    candidates.append(plugins_root / plugin_slug / "service_ops.py")
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return None
+
 DEFAULT_PYTHON_BIN = os.environ.get("PYTHON_BIN", "python3.11")
 DEFAULT_ENV_INHERIT = "minimal"
 ENV_INHERIT_ALL = "all"
@@ -199,17 +220,22 @@ def _merge_env(overrides: Optional[Dict[str, str]], inherit: str) -> Dict[str, s
 
 def _resolve_venv_command(service: PluginServiceRuntimeDTO, action: str, repo_dir: Path) -> List[str]:
     attr_map = {
+        "create": None,
         "install": "install_command",
         "start": "start_command",
         "stop": "stop_command",
         "restart": "restart_command",
     }
-    explicit = getattr(service, attr_map.get(action, ""), None)
+    explicit_attr = attr_map.get(action, "")
+    explicit = getattr(service, explicit_attr, None) if explicit_attr else None
     parsed = _parse_command(explicit)
     if parsed:
+        if action == "create":
+            return parsed
         return _prefer_venv_python(parsed, repo_dir)
 
     script_name = {
+        "create": "create_venv.py",
         "install": "install_with_venv.py",
         "start": "start_with_venv.py",
         "stop": "shutdown_with_venv.py",
@@ -220,8 +246,16 @@ def _resolve_venv_command(service: PluginServiceRuntimeDTO, action: str, repo_di
     script_rel = Path("service_scripts") / script_name
     if not (repo_dir / script_rel).exists():
         return []
-    python_bin = _venv_python(repo_dir) or _select_python_bin(service)
+    python_bin = _select_python_bin(service) if action == "create" else (_venv_python(repo_dir) or _select_python_bin(service))
     return [python_bin, str(script_rel)]
+
+
+def venv_ready(service: PluginServiceRuntimeDTO, plugin_slug: Optional[str] = None) -> bool:
+    repo_dir = _resolve_runtime_dir(service, plugin_slug)
+    venv_py = _venv_python(repo_dir)
+    if not venv_py:
+        return False
+    return Path(venv_py).exists()
 
 def ensure_service_dto(
     service_data: Union[Dict, PluginServiceRuntimeDTO], 
@@ -455,7 +489,12 @@ async def install_plugin_service(service_data: PluginServiceRuntimeDTO, plugin_s
         raise ValueError(f"Unknown service type: {service_type}")
 
 
-async def start_plugin_services(services_runtime: List[PluginServiceRuntimeDTO], plugin_slug: str):
+async def start_plugin_services(
+    services_runtime: List[PluginServiceRuntimeDTO],
+    plugin_slug: str,
+    *,
+    allow_install: bool = True,
+):
     """
     Starts a list of plugin services. This is used on application startup
     and assumes the code is already downloaded.
@@ -480,7 +519,7 @@ async def start_plugin_services(services_runtime: List[PluginServiceRuntimeDTO],
                 # Assuming install_python_service can handle a pre-existing venv
                 await install_python_service(service_data, target_dir)
             elif service_type == 'venv_process':
-                await _start_venv_service(service_data)
+                await _start_venv_service(service_data, allow_install=allow_install)
             else:
                 logger.warning("Skipping unknown service type", type=service_type, name=service_data.name)
                 
@@ -518,7 +557,14 @@ async def stop_plugin_services(services_runtime: List[PluginServiceRuntimeDTO], 
             continue
 
 
-async def restart_plugin_services(plugin_slug: str, definition_id: str, user_id: str = None, service_name: str = None):
+async def restart_plugin_services(
+    plugin_slug: str,
+    definition_id: str,
+    user_id: str = None,
+    service_name: str = None,
+    *,
+    allow_install: bool = True,
+):
     """
     Restart one or all services for a given plugin, using env vars from DB (not .env file).
     """
@@ -567,7 +613,11 @@ async def restart_plugin_services(plugin_slug: str, definition_id: str, user_id:
                     # (stop old process if tracked, then install/start again)
                     await install_python_service(service_runtime, target_dir)
                 elif service_type == "venv_process":
-                    await _restart_venv_service(service_runtime)
+                    if not allow_install and not venv_ready(service_runtime, plugin_slug):
+                        logger.info("Skipping restart; venv missing", name=service_runtime.name)
+                        results[service_runtime.name] = "skipped_missing_venv"
+                        continue
+                    await _restart_venv_service(service_runtime, allow_install=allow_install)
                 results[service_runtime.name] = "restarted"
             except Exception as e:
                 results[service_runtime.name] = f"failed: {str(e)}"
@@ -757,9 +807,32 @@ async def _run_subprocess(
         logger.info("Subprocess output", cmd=" ".join(cmd), stdout=_truncate_output(out), stderr=_truncate_output(err))
 
 
-async def _start_venv_service(service: PluginServiceRuntimeDTO) -> None:
+async def _ensure_venv_created(service: PluginServiceRuntimeDTO, repo_dir: Path) -> bool:
+    venv_dir = repo_dir / ".venv"
+    if venv_dir.exists():
+        return True
+    create_cmd = _resolve_venv_command(service, "create", repo_dir)
+    if not create_cmd:
+        logger.warning("No create venv command available", name=service.name, path=str(venv_dir))
+        return False
+    logger.info("Creating venv", name=service.name, cmd=" ".join(create_cmd))
+    await _run_subprocess(
+        create_cmd,
+        cwd=repo_dir,
+        timeout=300,
+        env=_build_service_env(service),
+        env_inherit=_resolve_env_inherit(service),
+    )
+    return venv_dir.exists()
+
+
+async def _start_venv_service(service: PluginServiceRuntimeDTO, *, allow_install: bool = True) -> None:
     repo_dir = _resolve_runtime_dir(service, getattr(service, "plugin_slug", None))
-    await _ensure_venv_repo(repo_dir, service)
+    if not repo_dir.exists():
+        if not allow_install:
+            logger.info("Venv repo missing; skipping install on startup", name=service.name, path=str(repo_dir))
+            return
+        await _ensure_venv_repo(repo_dir, service)
     _ensure_env_file(repo_dir)
 
     health_url = service.healthcheck_url
@@ -772,11 +845,18 @@ async def _start_venv_service(service: PluginServiceRuntimeDTO) -> None:
             # proceed to start
             pass
 
-    install_cmd = _resolve_venv_command(service, "install", repo_dir)
-    if install_cmd:
-        venv_dir = repo_dir / ".venv"
-        if not venv_dir.exists():
-            logger.info("Venv missing; running install command", name=service.name)
+    venv_dir = repo_dir / ".venv"
+    if not venv_dir.exists():
+        if not allow_install:
+            logger.info("Venv missing; skipping install on startup", name=service.name, path=str(venv_dir))
+            return
+        created = await _ensure_venv_created(service, repo_dir)
+        if not created:
+            logger.warning("Venv creation failed or unavailable; skipping install", name=service.name)
+            return
+        install_cmd = _resolve_venv_command(service, "install", repo_dir)
+        if install_cmd:
+            logger.info("Installing venv dependencies", name=service.name)
             await _run_subprocess(
                 install_cmd,
                 cwd=repo_dir,
@@ -822,11 +902,17 @@ async def _stop_venv_service(service: PluginServiceRuntimeDTO) -> None:
         logger.warning("Stop command failed", name=service.name, error=str(e))
 
 
-async def _restart_venv_service(service: PluginServiceRuntimeDTO) -> None:
+async def _restart_venv_service(service: PluginServiceRuntimeDTO, *, allow_install: bool = True) -> None:
     repo_dir = _resolve_runtime_dir(service, getattr(service, "plugin_slug", None))
     if not repo_dir.exists():
         logger.info("Venv service repo missing; starting fresh", name=service.name, path=str(repo_dir))
-        await _start_venv_service(service)
+        await _start_venv_service(service, allow_install=allow_install)
+        return
+    if not venv_ready(service, getattr(service, "plugin_slug", None)):
+        if not allow_install:
+            logger.info("Venv missing; skipping restart on startup", name=service.name, path=str(repo_dir))
+            return
+        await _start_venv_service(service, allow_install=allow_install)
         return
     restart_cmd = _resolve_venv_command(service, "restart", repo_dir)
     if restart_cmd:
@@ -842,7 +928,7 @@ async def _restart_venv_service(service: PluginServiceRuntimeDTO) -> None:
         return
     # fallback: stop then start
     await _stop_venv_service(service)
-    await _start_venv_service(service)
+    await _start_venv_service(service, allow_install=allow_install)
 
 
 async def _ensure_venv_repo(repo_dir: Path, service: PluginServiceRuntimeDTO) -> None:

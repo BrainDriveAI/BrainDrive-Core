@@ -29,6 +29,7 @@ from app.api.v1.api import api_router
 from app.core.init_db import init_db
 from app.models import UserRole
 from app.core.database import db_factory, get_db
+from app.core.job_manager_provider import initialize_job_manager, shutdown_job_manager
 from app.plugins.service_installler.start_stop_plugin_services import start_plugin_services_from_settings_on_startup, stop_all_plugin_services_on_shutdown
 
 # Configure standard logging
@@ -156,6 +157,7 @@ async def lifespan(app: FastAPI):
             await session.commit()
             logger.info("✅ Default roles created successfully")
 
+            await initialize_job_manager()
             # Start plugin services
             await start_plugin_services_from_settings_on_startup()
 
@@ -165,6 +167,7 @@ async def lifespan(app: FastAPI):
         raise
     finally:
         await stop_all_plugin_services_on_shutdown()
+        await shutdown_job_manager()
         # Cleanup (if needed)
         if not settings.USE_JSON_STORAGE and db_factory.engine:
             await db_factory.engine.dispose()

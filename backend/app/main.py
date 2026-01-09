@@ -31,9 +31,9 @@ async def startup_event():
     logger.info("Initializing application settings...")
     from app.init_settings import init_ollama_settings
     await init_ollama_settings()
+    await initialize_job_manager()
     # Start plugin services
     await start_plugin_services_on_startup()
-    await initialize_job_manager()
     logger.info("Settings initialization completed")
 
 
