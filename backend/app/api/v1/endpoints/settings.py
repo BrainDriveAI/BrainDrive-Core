@@ -5,6 +5,7 @@ from fastapi.exceptions import RequestValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 from typing import List, Optional
+import asyncio
 from app.core.database import get_db
 from app.core.auth_deps import require_user, require_admin, optional_user
 from app.core.auth_context import AuthContext
@@ -25,6 +26,31 @@ from sqlalchemy import text, func
 
 router = APIRouter(prefix="/settings", dependencies=[Depends(require_user)])
 logger = logging.getLogger(__name__)
+
+
+def _log_settings_audit_background(
+    request: Request, 
+    event_type: str, 
+    user_id: str, 
+    resource_id: str = None,
+    metadata: dict = None
+):
+    """Schedule audit log write in background for settings changes."""
+    async def _write():
+        try:
+            from app.core.audit import audit_logger, AuditEventType
+            await audit_logger.log_admin_action(
+                request=request,
+                user_id=user_id,
+                event_type=AuditEventType(event_type),
+                resource_type="setting",
+                resource_id=resource_id,
+                metadata=metadata,
+            )
+        except Exception as e:
+            logger.warning(f"Failed to write settings audit log: {e}")
+    
+    asyncio.create_task(_write())
 
 def mask_sensitive_data(definition_id: str, value: any) -> any:
     """
@@ -131,6 +157,7 @@ async def get_definition_by_id(db, definition_id: str):
 
 @router.post("/definitions", response_model=SettingDefinitionResponse)
 async def create_setting_definition(
+    request: Request,
     definition: SettingDefinitionCreate,
     db: AsyncSession = Depends(get_db),
     auth: AuthContext = Depends(require_admin)
@@ -223,6 +250,13 @@ async def create_setting_definition(
             "created_at": row[10],
             "updated_at": row[11]
         }
+        
+        # Log admin action
+        _log_settings_audit_background(
+            request, "admin.settings_created", auth.user_id,
+            resource_id=definition.id,
+            metadata={"name": definition.name, "category": definition.category}
+        )
         
         return setting_def
     except HTTPException as e:
@@ -321,6 +355,7 @@ async def get_setting_definitions(
 
 @router.patch("/definitions/{definition_id}", response_model=SettingDefinitionResponse)
 async def update_setting_definition(
+    request: Request,
     definition_id: str,
     update_data: SettingDefinitionUpdate,
     db: AsyncSession = Depends(get_db),
@@ -377,6 +412,13 @@ async def update_setting_definition(
         
         await db.execute(update_query, params)
         await db.commit()
+        
+        # Log admin action
+        _log_settings_audit_background(
+            request, "admin.settings_updated", auth.user_id,
+            resource_id=definition_id,
+            metadata={"fields_updated": list(update_dict.keys())}
+        )
         
         # Fetch the updated definition
         return await get_definition_by_id(db, definition_id)
@@ -484,6 +526,7 @@ async def put_setting_definition(
 
 @router.delete("/definitions/{definition_id}", response_model=dict)
 async def delete_setting_definition(
+    request: Request,
     definition_id: str,
     db: AsyncSession = Depends(get_db),
     auth: AuthContext = Depends(require_admin)
@@ -521,6 +564,12 @@ async def delete_setting_definition(
         """)
         await db.execute(delete_query, {"id": definition_id})
         await db.commit()
+        
+        # Log admin action
+        _log_settings_audit_background(
+            request, "admin.settings_deleted", auth.user_id,
+            resource_id=definition_id
+        )
         
         return {"message": f"Setting definition {definition_id} deleted successfully"}
     except HTTPException as e:

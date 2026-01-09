@@ -7,12 +7,35 @@ Services authenticate with static bearer tokens (not user JWTs).
 from fastapi import Depends, HTTPException, Request, status
 from typing import Optional, Set
 import logging
+import asyncio
 
 from app.core.config import settings
 from app.core.service_context import ServiceContext
 
 
 logger = logging.getLogger(__name__)
+
+
+def _log_service_auth_background(request: Request, reason: str, success: bool, service_name: Optional[str] = None):
+    """Schedule audit log write in background to not block request."""
+    async def _write():
+        try:
+            from app.core.audit import audit_logger
+            if success:
+                await audit_logger.log_service_auth_success(
+                    request=request,
+                    service_name=service_name or "unknown",
+                )
+            else:
+                await audit_logger.log_service_auth_failure(
+                    request=request,
+                    reason=reason,
+                    service_name=service_name,
+                )
+        except Exception:
+            pass  # Don't fail request if audit logging fails
+    
+    asyncio.create_task(_write())
 
 
 # Service definitions with their scopes
@@ -95,6 +118,7 @@ async def get_service_context(request: Request) -> ServiceContext:
             path=request.url.path,
             method=request.method
         )
+        _log_service_auth_background(request, "No service token provided", success=False)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Service authentication required. Provide Bearer token.",
@@ -110,6 +134,7 @@ async def get_service_context(request: Request) -> ServiceContext:
             path=request.url.path,
             method=request.method
         )
+        _log_service_auth_background(request, "Invalid service token", success=False)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid service token",
@@ -125,6 +150,7 @@ async def get_service_context(request: Request) -> ServiceContext:
             service_name=service_name,
             path=request.url.path
         )
+        _log_service_auth_background(request, f"Unknown service: {service_name}", success=False, service_name=service_name)
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=f"Service '{service_name}' not recognized"
@@ -135,6 +161,9 @@ async def get_service_context(request: Request) -> ServiceContext:
         service_name=service_name,
         scopes=service_def["scopes"]
     )
+    
+    # Log successful authentication
+    _log_service_auth_background(request, "Service authenticated", success=True, service_name=service_name)
     
     logger.info(
         "Service authenticated",

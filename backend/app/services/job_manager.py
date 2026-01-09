@@ -21,6 +21,34 @@ TERMINAL_STATES: Sequence[str] = (
 )
 
 
+def _log_job_audit_background(
+    event_type: str,
+    job_id: str,
+    user_id: str,
+    job_type: str = None,
+    status: str = "success",
+    reason: str = None,
+    metadata: dict = None
+):
+    """Schedule audit log write in background for job lifecycle events."""
+    async def _write():
+        try:
+            from app.core.audit import audit_logger, AuditEventType, EventStatus
+            await audit_logger.log_job_event(
+                event_type=AuditEventType(event_type),
+                job_id=job_id,
+                user_id=user_id,
+                job_type=job_type,
+                status=EventStatus(status),
+                reason=reason,
+                metadata=metadata,
+            )
+        except Exception as e:
+            logger.warning(f"Failed to write job audit log: {e}")
+    
+    asyncio.create_task(_write())
+
+
 class JobCanceledError(Exception):
     """Raised when a job is canceled during execution."""
 
@@ -354,6 +382,17 @@ class JobManager:
             created = True
 
         logger.info("Enqueued job %s of type %s", job.id, job_type)
+        
+        # Audit log for job creation
+        if created:
+            _log_job_audit_background(
+                event_type="job.created",
+                job_id=job.id,
+                user_id=user_id,
+                job_type=job_type,
+                metadata={"priority": priority}
+            )
+        
         return job, created
 
     async def get_job(self, job_id: str) -> Optional[Job]:
@@ -712,6 +751,14 @@ class JobManager:
             job.completed_at = now
             job.updated_at = now
             await session.commit()
+            
+            # Audit log for job completion
+            _log_job_audit_background(
+                event_type="job.completed",
+                job_id=job_id,
+                user_id=job.user_id,
+                job_type=job.job_type,
+            )
 
     async def _mark_job_failed(self, job_id: str, error_message: str) -> None:
         now = datetime.now(timezone.utc)
@@ -725,6 +772,16 @@ class JobManager:
             job.completed_at = now
             job.updated_at = now
             await session.commit()
+            
+            # Audit log for job failure
+            _log_job_audit_background(
+                event_type="job.failed",
+                job_id=job_id,
+                user_id=job.user_id,
+                job_type=job.job_type,
+                status="failure",
+                reason=error_message[:200] if error_message else None,  # Truncate error message
+            )
 
     async def _mark_job_canceled(self, job_id: str) -> None:
         now = datetime.now(timezone.utc)
@@ -738,6 +795,14 @@ class JobManager:
             if job.message is None:
                 job.message = "Canceled"
             await session.commit()
+            
+            # Audit log for job cancellation
+            _log_job_audit_background(
+                event_type="job.canceled",
+                job_id=job_id,
+                user_id=job.user_id,
+                job_type=job.job_type,
+            )
 
 
 class SleepJobHandler(BaseJobHandler):

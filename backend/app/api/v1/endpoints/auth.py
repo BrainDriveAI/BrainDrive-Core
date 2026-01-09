@@ -28,6 +28,31 @@ router = APIRouter(prefix="/auth")
 logger = logging.getLogger(__name__)
 
 
+def _log_auth_event_background(request: Request, event_type: str, success: bool, user_id: str = None, reason: str = None):
+    """Schedule audit log write in background."""
+    import asyncio
+    async def _write():
+        try:
+            from app.core.audit import audit_logger, AuditEventType
+            if success:
+                await audit_logger.log_auth_success(
+                    request=request,
+                    user_id=user_id,
+                    event_type=AuditEventType(event_type),
+                )
+            else:
+                await audit_logger.log_auth_failure(
+                    request=request,
+                    reason=reason or "Unknown error",
+                    event_type=AuditEventType(event_type),
+                    user_id=user_id,
+                )
+        except Exception as e:
+            logger.warning(f"Failed to write auth audit log: {e}")
+    
+    asyncio.create_task(_write())
+
+
 # Enhanced logging for token debugging
 def log_token_info(token, token_type="access", mask=True):
     """Log token information for debugging purposes."""
@@ -196,6 +221,7 @@ def log_token_validation(token: str, user_id: str, source: str, result: str):
 
 @router.post("/register", response_model=UserResponse)
 async def register(
+    request: Request,
     user_data: UserCreate,
     db: AsyncSession = Depends(get_db),
     _: None = Depends(rate_limit_ip(limit=3, window_seconds=3600))
@@ -205,6 +231,7 @@ async def register(
         # Check if user already exists
         existing_user = await User.get_by_email(db, user_data.email)
         if existing_user:
+            _log_auth_event_background(request, "auth.register_failed", success=False, reason="Email already registered")
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Email already registered",
@@ -249,6 +276,9 @@ async def register(
             logger.error(f"Error during user initialization: {init_error}")
             # Continue with registration even if initialization fails
 
+        # Log successful registration
+        _log_auth_event_background(request, "auth.register_success", success=True, user_id=str(user.id))
+        
         return UserResponse(
             id=str(user.id),
             email=user.email,
@@ -256,8 +286,11 @@ async def register(
             version=user.version,
         )
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Registration error: {e}")
+        _log_auth_event_background(request, "auth.register_failed", success=False, reason=str(e))
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Could not register user",
@@ -266,6 +299,7 @@ async def register(
 
 @router.post("/login")
 async def login(
+    request: Request,
     user_data: UserLogin,
     response: Response,
     db: AsyncSession = Depends(get_db),
@@ -276,6 +310,7 @@ async def login(
         # Authenticate user
         user = await User.get_by_email(db, user_data.email)
         if not user or not verify_password(user_data.password, user.password):
+            _log_auth_event_background(request, "auth.login_failed", success=False, reason="Invalid email or password")
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid email or password",
@@ -400,12 +435,17 @@ async def login(
             "has_refresh_token": bool(response_data["refresh_token"]),
         }
         logger.info(f"Returning tokens to client: {safe_response}")
+        
+        # Log successful login
+        _log_auth_event_background(request, "auth.login_success", success=True, user_id=str(user.id))
+        
         return response_data
 
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Unexpected error during login: {e}")
+        _log_auth_event_background(request, "auth.login_failed", success=False, reason=str(e))
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Login failed"
         )

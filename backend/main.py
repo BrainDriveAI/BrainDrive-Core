@@ -31,6 +31,7 @@ from app.models import UserRole
 from app.core.database import db_factory, get_db
 from app.plugins.service_installler.start_stop_plugin_services import start_plugin_services_from_settings_on_startup, stop_all_plugin_services_on_shutdown
 from app.middleware.request_size import RequestSizeMiddleware
+from app.middleware.request_id import RequestIdMiddleware
 
 # Configure standard logging
 logging.basicConfig(
@@ -239,6 +240,9 @@ app.add_middleware(
     TrustedHostMiddleware, 
     allowed_hosts=["*"]  # Allow all hosts (change in production)
 )
+
+# ✅ 3.5. Request ID for correlation and audit logging
+app.add_middleware(RequestIdMiddleware)
 
 # ✅ 4. Request Size Enforcement
 app.add_middleware(

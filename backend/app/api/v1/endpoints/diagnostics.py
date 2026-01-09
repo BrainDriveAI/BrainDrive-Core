@@ -1,10 +1,11 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
 from typing import Any, Dict, List, Optional
 from pathlib import Path
 import subprocess
 import json
+import asyncio
 
 from app.core.config import settings
 from app.core.database import get_db
@@ -13,6 +14,23 @@ from app.core.auth_context import AuthContext
 from app.routers.plugins import plugin_manager
 
 router = APIRouter(tags=["diagnostics"])
+
+
+def _log_diagnostics_access_background(request: Request, user_id: str):
+    """Log diagnostics access in background."""
+    async def _write():
+        try:
+            from app.core.audit import audit_logger, AuditEventType
+            await audit_logger.log_admin_action(
+                request=request,
+                user_id=user_id,
+                event_type=AuditEventType.ADMIN_DIAGNOSTICS_ACCESSED,
+                resource_type="diagnostics",
+            )
+        except Exception:
+            pass
+    
+    asyncio.create_task(_write())
 
 
 def _get_repo_path() -> Path:
@@ -119,10 +137,14 @@ def _read_log_tail(limit: int = 100) -> Dict[str, Any]:
 
 @router.get("/diagnostics")
 async def get_diagnostics(
+    request: Request,
     db: AsyncSession = Depends(get_db),
     auth: AuthContext = Depends(require_admin),
 ) -> Dict[str, Any]:
     """Backend diagnostics surface for issue triage (admin-only)."""
+    # Log diagnostics access
+    _log_diagnostics_access_background(request, auth.user_id)
+    
     db_info = await _get_db_metadata(db)
     plugin_summary = await _get_plugin_summary(auth.user_id)
     commit_hash = _get_commit_hash()

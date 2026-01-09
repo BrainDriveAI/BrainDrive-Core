@@ -9,7 +9,7 @@ based on their slug, providing a unified interface for plugin management.
 Now includes remote plugin installation from GitHub repositories.
 """
 
-from fastapi import APIRouter, HTTPException, Depends, status, File, UploadFile, Form, Body, BackgroundTasks
+from fastapi import APIRouter, HTTPException, Depends, status, File, UploadFile, Form, Body, BackgroundTasks, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Dict, Any, Optional, Union
 from pathlib import Path
@@ -18,12 +18,39 @@ import json
 import structlog
 import tempfile
 import shutil
+import asyncio
 from pydantic import BaseModel
 
 # Import the remote installer
 from .remote_installer import RemotePluginInstaller, install_plugin_from_url
 
 logger = structlog.get_logger()
+
+
+def _log_plugin_audit_background(
+    request: Request,
+    event_type: str,
+    user_id: str,
+    plugin_id: str,
+    plugin_name: str = None,
+    metadata: dict = None
+):
+    """Schedule audit log write in background for plugin lifecycle events."""
+    async def _write():
+        try:
+            from app.core.audit import audit_logger, AuditEventType
+            await audit_logger.log_plugin_action(
+                request=request,
+                user_id=user_id,
+                event_type=AuditEventType(event_type),
+                plugin_id=plugin_id,
+                plugin_name=plugin_name,
+                metadata=metadata,
+            )
+        except Exception as e:
+            logger.warning(f"Failed to write plugin audit log: {e}")
+    
+    asyncio.create_task(_write())
 
 def _get_error_suggestions(step: str, error_message: str) -> list:
     """Provide helpful suggestions based on the error step and message"""
@@ -586,6 +613,7 @@ async def stop_plugin_service(
 # Local plugin management endpoints
 @router.post("/{plugin_slug}/install")
 async def install_plugin(
+    request: Request,
     plugin_slug: str,
     auth: AuthContext = Depends(require_user),
     db: AsyncSession = Depends(get_db)
@@ -597,6 +625,13 @@ async def install_plugin(
         result = await universal_manager.install_plugin(plugin_slug, auth.user_id, db)
 
         if result['success']:
+            # Log successful plugin installation
+            _log_plugin_audit_background(
+                request, "plugin.installed", auth.user_id,
+                plugin_id=result.get('plugin_id', plugin_slug),
+                plugin_name=plugin_slug
+            )
+            
             return {
                 "status": "success",
                 "message": f"Plugin '{plugin_slug}' installed successfully",
@@ -624,6 +659,7 @@ async def install_plugin(
 
 @router.delete("/{plugin_slug}/uninstall")
 async def uninstall_plugin(
+    request: Request,
     plugin_slug: str,
     auth: AuthContext = Depends(require_user),
     db: AsyncSession = Depends(get_db)
@@ -635,6 +671,13 @@ async def uninstall_plugin(
         result = await universal_manager.delete_plugin(plugin_slug, auth.user_id, db)
 
         if result['success']:
+            # Log successful plugin uninstallation
+            _log_plugin_audit_background(
+                request, "plugin.uninstalled", auth.user_id,
+                plugin_id=result.get('plugin_id', plugin_slug),
+                plugin_name=plugin_slug
+            )
+            
             return {
                 "status": "success",
                 "message": f"Plugin '{plugin_slug}' uninstalled successfully",
@@ -1197,6 +1240,7 @@ async def install_plugin_from_repository(
 
 @router.post("/{plugin_slug}/update")
 async def update_plugin(
+    request: Request,
     plugin_slug: str,
     auth: AuthContext = Depends(require_user),
     db: AsyncSession = Depends(get_db)
@@ -1235,6 +1279,14 @@ async def update_plugin(
         logger.info(f"Update result: {result}")
 
         if result['success']:
+            # Log successful plugin update
+            _log_plugin_audit_background(
+                request, "plugin.updated", auth.user_id,
+                plugin_id=str(plugin.id),
+                plugin_name=plugin_slug,
+                metadata={"previous_version": plugin.version, "new_version": result.get('version', 'latest')}
+            )
+            
             return {
                 "status": "success",
                 "message": f"Plugin '{plugin_slug}' updated successfully",
@@ -1248,6 +1300,14 @@ async def update_plugin(
         else:
             # For updates, "Plugin already installed" is actually success
             if 'already installed' in result.get('error', '').lower():
+                # Log successful plugin update
+                _log_plugin_audit_background(
+                    request, "plugin.updated", auth.user_id,
+                    plugin_id=str(plugin.id),
+                    plugin_name=plugin_slug,
+                    metadata={"previous_version": plugin.version, "new_version": "1.0.5"}
+                )
+                
                 return {
                     "status": "success",
                     "message": f"Plugin '{plugin_slug}' updated successfully",
