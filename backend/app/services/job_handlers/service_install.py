@@ -1,3 +1,4 @@
+import asyncio
 import importlib.util
 import logging
 from pathlib import Path
@@ -31,6 +32,18 @@ class ServiceInstallHandler(BaseJobHandler):
         service_keys: List[str] = payload.get("service_keys", [])
         full_install: bool = bool(payload.get("full_install", False))
         force_recreate: bool = bool(payload.get("force_recreate", False))
+        auto_start = payload.get("auto_start", True)
+
+        def _should_auto_start(key: str) -> bool:
+            if isinstance(auto_start, dict):
+                return bool(auto_start.get(key, False))
+            return bool(auto_start)
+
+        async def _maybe_await(func, *args, **kwargs):
+            result = func(*args, **kwargs)
+            if asyncio.iscoroutine(result):
+                return await result
+            return result
 
         await context.report_progress(
             percent=0,
@@ -53,8 +66,28 @@ class ServiceInstallHandler(BaseJobHandler):
             )
             try:
                 install_result = await service_ops.prepare_service(key, full_install=full_install, force_recreate=force_recreate)
-                start_result = await service_ops.start_service(key)
-                health = await service_ops.health_check(key)
+                start_result = {"success": False, "skipped": True, "reason": "auto_start_disabled"}
+                health = {"skipped": True, "reason": "auto_start_disabled"}
+                if _should_auto_start(key):
+                    precheck = None
+                    if hasattr(service_ops, "pre_start_check"):
+                        precheck = await _maybe_await(service_ops.pre_start_check, key)
+                    precheck_failed = False
+                    if isinstance(precheck, dict):
+                        precheck_failed = not precheck.get("success", True)
+                    elif precheck is False:
+                        precheck_failed = True
+                    if precheck_failed:
+                        start_result = {
+                            "success": False,
+                            "skipped": True,
+                            "reason": "pre_start_check_failed",
+                            "check": precheck,
+                        }
+                        health = {"skipped": True, "reason": "pre_start_check_failed"}
+                    else:
+                        start_result = await _maybe_await(service_ops.start_service, key)
+                        health = await _maybe_await(service_ops.health_check, key)
                 results.append({"service": key, **install_result, "start": start_result, "health": health})
                 await context.report_progress(
                     stage="service_completed",

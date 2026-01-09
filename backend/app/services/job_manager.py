@@ -500,32 +500,50 @@ class JobManager:
             },
         )
         now = datetime.now(timezone.utc)
-        async with self.session() as session:
-            job = await session.get(Job, job_id)
-            if not job:
+        retry_delays = [0.0, 0.1, 0.2, 0.5, 1.0]
+        for attempt, delay in enumerate(retry_delays, start=1):
+            if delay:
+                await asyncio.sleep(delay)
+            try:
+                async with self.session() as session:
+                    job = await session.get(Job, job_id)
+                    if not job:
+                        return
+
+                    if percent is not None:
+                        job.progress_percent = percent
+                    if stage is not None:
+                        job.current_stage = stage
+                    if message is not None:
+                        job.message = message
+                    job.updated_at = now
+
+                    result = await session.execute(
+                        sa.select(sa.func.max(JobProgressEvent.sequence_number)).where(JobProgressEvent.job_id == job_id)
+                    )
+                    next_sequence = (result.scalar_one_or_none() or 0) + 1
+
+                    event = JobProgressEvent(
+                        job_id=job_id,
+                        event_type=event_type,
+                        data=data,
+                        sequence_number=next_sequence,
+                    )
+                    session.add(event)
+                    await session.commit()
                 return
-
-            if percent is not None:
-                job.progress_percent = percent
-            if stage is not None:
-                job.current_stage = stage
-            if message is not None:
-                job.message = message
-            job.updated_at = now
-
-            result = await session.execute(
-                sa.select(sa.func.max(JobProgressEvent.sequence_number)).where(JobProgressEvent.job_id == job_id)
-            )
-            next_sequence = (result.scalar_one_or_none() or 0) + 1
-
-            event = JobProgressEvent(
-                job_id=job_id,
-                event_type=event_type,
-                data=data,
-                sequence_number=next_sequence,
-            )
-            session.add(event)
-            await session.commit()
+            except sa.exc.OperationalError as exc:
+                message_text = str(exc).lower()
+                if "database is locked" not in message_text:
+                    raise
+                if attempt >= len(retry_delays):
+                    logger.warning("Dropping progress event due to sqlite lock", job_id=job_id)
+                    return
+                logger.warning(
+                    "Progress event hit sqlite lock; retrying",
+                    job_id=job_id,
+                    attempt=attempt,
+                )
 
     async def get_progress_events(self, job_id: str, since: Optional[int] = None) -> List[JobProgressEvent]:
         """Return job progress events optionally filtered by sequence number."""

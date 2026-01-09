@@ -34,24 +34,30 @@ class DatabaseFactory:
                     url = url.set(drivername="sqlite+aiosqlite")
                 
                 logger.info(f"Creating async database engine with URL: {url}")
-                return create_async_engine(
+                connect_args = {}
+                if settings.DATABASE_TYPE == "sqlite":
+                    connect_args = {"check_same_thread": False, "timeout": 30}
+                engine = create_async_engine(
                     url,
                     echo=settings.DEBUG and getattr(logging, settings.SQL_LOG_LEVEL.upper(), logging.WARNING) <= logging.DEBUG,
                     poolclass=NullPool,
-                    connect_args={"check_same_thread": False} if settings.DATABASE_TYPE == "sqlite" else {}
+                    connect_args=connect_args,
                 )
-                
-                # Enable foreign key support for SQLite
+
+                # Enable SQLite PRAGMAs for better concurrency.
                 if settings.DATABASE_TYPE == "sqlite":
-                    @event.listens_for(self.engine.sync_engine, "connect")
+                    @event.listens_for(engine.sync_engine, "connect")
                     def set_sqlite_pragma(dbapi_connection, connection_record):
                         if isinstance(dbapi_connection, sqlite3.Connection):
                             cursor = dbapi_connection.cursor()
+                            cursor.execute("PRAGMA journal_mode=WAL")
+                            cursor.execute("PRAGMA synchronous=NORMAL")
+                            cursor.execute("PRAGMA busy_timeout=5000")
                             cursor.execute("PRAGMA foreign_keys=ON")
                             cursor.close()
-                            logger.info("SQLite foreign key support enabled")
-                
-                return self.engine
+                            logger.info("SQLite pragmas set (WAL/busy_timeout)")
+
+                return engine
         except Exception as e:
             logger.error(f"Error creating database engine: {e}")
             raise
