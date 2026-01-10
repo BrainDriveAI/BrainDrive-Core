@@ -96,16 +96,12 @@ flowchart TB
         subgraph Backend ["Backend (FastAPI)"]
             direction LR
             API[REST API]
-            LCAPI[Lifecycle API]
-            AIPROV[AI Providers]
             DB[(SQLite)]
         end
 
-        Frontend --> SB
-        Frontend -.->|Direct Access| API
+        Frontend --> API
         SB --> API
         API --> DB
-        API --> AIPROV
     end
 
     subgraph Plugins ["Plugins"]
@@ -114,17 +110,18 @@ flowchart TB
         P2[Ollama Plugin]
         P3[Settings Plugin]
         P4[Your Plugin]
-        LM[Lifecycle Manager]
     end
 
     Frontend -.->|Loads via Module Federation| Plugins
     Plugins --> SB
-    LM --> LCAPI
+
+    note[Each plugin has its own Lifecycle Manager]
 
     style Core fill:#1a1a2e,stroke:#4a4a6a,color:#fff
     style Frontend fill:#2a2a4e,stroke:#4a4a6a,color:#fff
     style Backend fill:#2a2a4e,stroke:#4a4a6a,color:#fff
     style Plugins fill:#16213e,stroke:#4a4a6a,color:#fff
+    style note fill:none,stroke:none,color:#888
 ```
 
 **Core System** (this repo):
