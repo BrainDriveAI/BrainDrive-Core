@@ -115,13 +115,10 @@ flowchart TB
     Frontend -.->|Loads via Module Federation| Plugins
     Plugins --> SB
 
-    note[Each plugin has its own Lifecycle Manager]
-
     style Core fill:#1a1a2e,stroke:#4a4a6a,color:#fff
     style Frontend fill:#2a2a4e,stroke:#4a4a6a,color:#fff
     style Backend fill:#2a2a4e,stroke:#4a4a6a,color:#fff
     style Plugins fill:#16213e,stroke:#4a4a6a,color:#fff
-    style note fill:none,stroke:none,color:#888
 ```
 
 **Core System** (this repo):
