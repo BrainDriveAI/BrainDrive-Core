@@ -67,7 +67,7 @@ Open `backend/.env-dev` and copy values into a new `backend/.env`, adjusting sec
 ### 3.3 Run the FastAPI Development Server
  
 ```bash
-uvicorn main:app --reload --host localhost --port 8005
+uvicorn main:app --host localhost --port 8005
 ```
  
 Leave this process running; it serves BrainDrive's API and documentation.
@@ -124,7 +124,7 @@ If the frontend cannot reach the backend, confirm both servers are running and t
  
 1. Open two terminal windows.
 2. In each window run `conda activate BrainDriveDev`.
-3. Terminal 1: `cd backend` then `uvicorn main:app --reload --host localhost --port 8005`.
+3. Terminal 1: `cd backend` then `uvicorn main:app --host localhost --port 8005`.
 4. Terminal 2: `cd frontend` then `npm run dev`.
 5. Visit [http://localhost:5173](http://localhost:5173).
 
