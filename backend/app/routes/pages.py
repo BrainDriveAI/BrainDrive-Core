@@ -4,7 +4,8 @@ from typing import List, Optional
 from uuid import UUID
 
 from app.core.database import get_db
-from app.core.security import get_current_user
+from app.core.auth_deps import require_user, optional_user
+from app.core.auth_context import AuthContext
 from app.models.page import Page
 from app.models.navigation import NavigationRoute
 from app.models.user import User
@@ -18,6 +19,8 @@ from app.schemas.page import (
     PagePublish,
     PageHierarchyUpdate
 )
+from app.services.page_service import get_user_page, ensure_page_belongs_to_user
+from app.services.navigation_service import ensure_route_belongs_to_user
 
 router = APIRouter(prefix="/pages", tags=["pages"])
 
@@ -25,7 +28,7 @@ router = APIRouter(prefix="/pages", tags=["pages"])
 async def create_page(
     page_data: PageCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    auth: AuthContext = Depends(require_user)
 ):
     """Create a new page."""
     # Check if route already exists
@@ -45,12 +48,8 @@ async def create_page(
                 detail="The specified navigation route does not exist"
             )
         
-        # Check if user has access to the navigation route
-        if nav_route.creator_id != current_user.id:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="You don't have permission to use this navigation route"
-            )
+        # Verify user has access to the navigation route
+        ensure_route_belongs_to_user(nav_route, auth)
     
     # Create new page
     page = Page(
@@ -58,7 +57,7 @@ async def create_page(
         route=page_data.route,
         parent_route=page_data.parent_route,
         content=page_data.content,
-        creator_id=current_user.id,
+        creator_id=auth.user_id,
         navigation_route_id=page_data.navigation_route_id,
         description=page_data.description,
         icon=page_data.icon
@@ -90,26 +89,11 @@ async def update_page_hierarchy(
     page_id: UUID,
     hierarchy_update: PageHierarchyUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    auth: AuthContext = Depends(require_user)
 ):
     """Update the hierarchy of a specific page."""
-    page = await Page.get_by_id(db, page_id)
-    if not page:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Page not found"
-        )
-    
-    # Check if user has permission to update the page
-    # Convert both IDs to strings without hyphens for comparison
-    creator_id_str = str(page.creator_id).replace('-', '')
-    current_user_id_str = str(current_user.id).replace('-', '')
-    
-    if creator_id_str != current_user_id_str:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="You don't have permission to update this page"
-        )
+    # Get page and ensure it belongs to current user
+    page = await get_user_page(db, page_id, auth, allow_published=False)
     
     # Validate that the route will be unique using the page name
     if hierarchy_update.parent_route is not None or hierarchy_update.parent_type is not None:
@@ -246,7 +230,7 @@ async def get_pages(
     parent_route: Optional[str] = None,
     is_parent_page: Optional[bool] = None,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    auth: AuthContext = Depends(require_user)
 ):
     """Get a list of pages with optional filtering."""
     # Start with base query
@@ -254,7 +238,7 @@ async def get_pages(
     
     # If creator_id is not provided, use the current user's ID
     if not creator_id:
-        creator_id = current_user.id
+        creator_id = auth.user_id
         print(f"Using current user ID: {creator_id} for filtering pages")
     
     # Apply filters
@@ -333,7 +317,7 @@ async def get_pages(
 async def get_page(
     page_id: UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    auth: AuthContext = Depends(require_user)
 ):
     """Get a specific page by ID."""
     page = await Page.get_by_id(db, page_id)
@@ -343,16 +327,9 @@ async def get_page(
             detail="Page not found"
         )
     
-    # Check if user has access to the page
-    # Convert both IDs to strings without hyphens for comparison
-    creator_id_str = str(page.creator_id).replace('-', '')
-    current_user_id_str = str(current_user.id).replace('-', '')
-    
-    if creator_id_str != current_user_id_str and not page.is_published:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="You don't have permission to access this page"
-        )
+    # Verify user has access to the page (owner or published)
+    # This will raise 404 if user doesn't have access
+    page = await get_user_page(db, page.id, auth, allow_published=True)
     
     # Convert Page object to PageDetailResponse
     return PageDetailResponse(
@@ -378,7 +355,7 @@ async def get_page(
 async def get_page_by_route(
     route: str,
     db: AsyncSession = Depends(get_db),
-    current_user: Optional[User] = Depends(get_current_user)
+    auth: Optional[AuthContext] = Depends(optional_user)
 ):
     """Get a specific page by route."""
     page = await Page.get_by_route(db, route)
@@ -390,21 +367,14 @@ async def get_page_by_route(
     
     # Check if user has access to the page
     if not page.is_published:
-        if not current_user:
+        if not auth:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="You don't have permission to access this page"
             )
         
-        # Convert both IDs to strings without hyphens for comparison
-        creator_id_str = str(page.creator_id).replace('-', '')
-        current_user_id_str = str(current_user.id).replace('-', '')
-        
-        if creator_id_str != current_user_id_str:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="You don't have permission to access this page"
-            )
+        # Verify user has permission to access the page
+        ensure_page_belongs_to_user(page, auth)
     
     # Convert Page object to PageDetailResponse
     return PageDetailResponse(
@@ -431,7 +401,7 @@ async def update_page(
     page_id: UUID,
     page_data: PageUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    auth: AuthContext = Depends(require_user)
 ):
     """Update a specific page."""
     # Log the incoming request data for debugging
@@ -468,22 +438,8 @@ async def update_page(
             detail="Page not found"
         )
     
-    # Check if user has permission to update the page
-    print(f"Page creator_id: {page.creator_id}, Current user id: {current_user.id}")
-    
-    # Convert both IDs to strings without hyphens for comparison
-    creator_id_str = str(page.creator_id).replace('-', '')
-    current_user_id_str = str(current_user.id).replace('-', '')
-    
-    print(f"Normalized creator_id: {creator_id_str}")
-    print(f"Normalized current_user_id: {current_user_id_str}")
-    print(f"Are they equal? {creator_id_str == current_user_id_str}")
-    
-    if creator_id_str != current_user_id_str:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="You don't have permission to update this page"
-        )
+    # Verify user has permission to update the page
+    ensure_page_belongs_to_user(page, auth)
     
     # Check if route is being updated and if it already exists
     if page_data.route and page_data.route != page.route:
@@ -504,24 +460,22 @@ async def update_page(
             print(f"Navigation route details: id={nav_route.id}, name={nav_route.name}")
             
             # Check if user has access to the navigation route
-            print(f"Nav route creator_id: {nav_route.creator_id}, Current user id: {current_user.id}")
+            print(f"Nav route creator_id: {nav_route.creator_id}, Current user id: {auth.user_id}")
             
             # Convert both IDs to strings without hyphens for comparison
             nav_creator_id_str = str(nav_route.creator_id).replace('-', '')
-            current_user_id_str = str(current_user.id).replace('-', '')
+            auth_id_str = str(auth.user_id).replace('-', '')
             
             print(f"Normalized nav creator_id: {nav_creator_id_str}")
-            print(f"Normalized current_user_id: {current_user_id_str}")
-            print(f"Are they equal? {nav_creator_id_str == current_user_id_str}")
+            print(f"Normalized auth_id: {auth_id_str}")
+            print(f"Are they equal? {nav_creator_id_str == auth_id_str}")
             
             # For system routes, allow any user to use them
             if nav_route.is_system_route:
                 print("This is a system route - allowing access")
-            elif nav_creator_id_str != current_user_id_str:
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail="You don't have permission to use this navigation route"
-                )
+            elif not nav_route.is_system_route:
+                # Verify user has access to the navigation route
+                ensure_route_belongs_to_user(nav_route, auth)
         else:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -616,7 +570,7 @@ async def update_page(
 async def delete_page(
     page_id: UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    auth: AuthContext = Depends(require_user)
 ):
     """Delete a specific page."""
     page = await Page.get_by_id(db, page_id)
@@ -626,16 +580,8 @@ async def delete_page(
             detail="Page not found"
         )
     
-    # Check if user has permission to delete the page
-    # Convert both IDs to strings without hyphens for comparison
-    creator_id_str = str(page.creator_id).replace('-', '')
-    current_user_id_str = str(current_user.id).replace('-', '')
-    
-    if creator_id_str != current_user_id_str:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="You don't have permission to delete this page"
-        )
+    # Verify user has permission to delete the page
+    ensure_page_belongs_to_user(page, auth)
     
     # Delete the page
     await db.delete(page)
@@ -648,7 +594,7 @@ async def create_page_backup(
     page_id: UUID,
     backup_data: PageBackup,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    auth: AuthContext = Depends(require_user)
 ):
     """Create a backup of a specific page."""
     page = await Page.get_by_id(db, page_id)
@@ -658,16 +604,8 @@ async def create_page_backup(
             detail="Page not found"
         )
     
-    # Check if user has permission to backup the page
-    # Convert both IDs to strings without hyphens for comparison
-    creator_id_str = str(page.creator_id).replace('-', '')
-    current_user_id_str = str(current_user.id).replace('-', '')
-    
-    if creator_id_str != current_user_id_str:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="You don't have permission to backup this page"
-        )
+    # Verify user has permission to backup the page
+    ensure_page_belongs_to_user(page, auth)
     
     # Create backup
     if backup_data.create_backup:
@@ -698,7 +636,7 @@ async def publish_page(
     page_id: UUID,
     publish_data: PagePublish,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    auth: AuthContext = Depends(require_user)
 ):
     """Publish or unpublish a specific page."""
     page = await Page.get_by_id(db, page_id)
@@ -708,16 +646,8 @@ async def publish_page(
             detail="Page not found"
         )
     
-    # Check if user has permission to publish/unpublish the page
-    # Convert both IDs to strings without hyphens for comparison
-    creator_id_str = str(page.creator_id).replace('-', '')
-    current_user_id_str = str(current_user.id).replace('-', '')
-    
-    if creator_id_str != current_user_id_str:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="You don't have permission to publish/unpublish this page"
-        )
+    # Verify user has permission to publish/unpublish the page
+    ensure_page_belongs_to_user(page, auth)
     
     # Publish or unpublish
     if publish_data.publish:

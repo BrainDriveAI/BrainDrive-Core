@@ -8,7 +8,6 @@ from ..plugins.repository import PluginRepository
 from ..core.database import get_db
 from ..models.plugin import Plugin, Module
 from ..models.user import User
-from ..core.security import get_current_user
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 import structlog
@@ -23,9 +22,9 @@ logger = structlog.get_logger()
 PLUGINS_DIR = Path(__file__).parent.parent.parent / "plugins"
 plugin_manager = PluginManager(str(PLUGINS_DIR))
 
-# Import security schemes for Swagger documentation
-from fastapi.security import OAuth2PasswordBearer
-from ..core.security import oauth2_scheme
+# Import new auth dependencies
+from ..core.auth_deps import require_user
+from ..core.auth_context import AuthContext
 
 # Create a router for plugin management endpoints WITHOUT a prefix
 router = APIRouter(tags=["plugins"])
@@ -86,21 +85,18 @@ async def startup_event():
         
         break  # Only need one session
 
-@router.get("/plugins/manifest", dependencies=[Depends(oauth2_scheme)])
-async def get_plugin_manifest(current_user: User = Depends(get_current_user)):
+@router.get("/plugins/manifest")
+async def get_plugin_manifest(auth: AuthContext = Depends(require_user)):
     """Get the manifest of all available plugins for the current user."""
-    # Log the current user ID
-    logger.info(f"Getting plugin manifest for user: {current_user.id}")
+    logger.info(f"Getting plugin manifest for user: {auth.user_id}")
     
-    # Ensure plugin manager is initialized
     if not plugin_manager._initialized:
         await plugin_manager.initialize()
     
-    # Get plugins for the current user
-    plugins = await plugin_manager.get_all_plugins(user_id=current_user.id)
+    plugins = await plugin_manager.get_all_plugins(user_id=auth.user_id)
     
     # Log the number of plugins returned
-    logger.info(f"Found {len(plugins)} plugins for user {current_user.id}")
+    logger.info(f"Found {len(plugins)} plugins for user {auth.user_id}")
     
     # Log the plugin IDs
     plugin_ids = list(plugins.keys())
@@ -142,21 +138,17 @@ async def get_plugin_manifest(current_user: User = Depends(get_current_user)):
     
     return transformed_plugins
 
-@router.get("/plugins/manifest/designer", dependencies=[Depends(oauth2_scheme)])
-async def get_plugin_manifest_for_designer(current_user: User = Depends(get_current_user)):
+@router.get("/plugins/manifest/designer")
+async def get_plugin_manifest_for_designer(auth: AuthContext = Depends(require_user)):
     """Get the manifest of all available plugins with layout information for the page designer."""
-    # Log the current user ID
-    logger.info(f"Getting plugin manifest for user: {current_user.id}")
+    logger.info(f"Getting plugin manifest for user: {auth.user_id}")
     
-    # Ensure plugin manager is initialized
     if not plugin_manager._initialized:
         await plugin_manager.initialize()
     
-    # Get plugins with modules for the current user
-    plugins = await plugin_manager.get_all_plugins_for_designer(user_id=current_user.id)
+    plugins = await plugin_manager.get_all_plugins_for_designer(user_id=auth.user_id)
     
-    # Log the number of plugins returned
-    logger.info(f"Found {len(plugins)} plugins for user {current_user.id}")
+    logger.info(f"Found {len(plugins)} plugins for user {auth.user_id}")
     
     # Log the plugin IDs
     plugin_ids = list(plugins.keys())
@@ -215,11 +207,11 @@ async def get_plugin_manifest_for_designer(current_user: User = Depends(get_curr
     
     return transformed_plugins
 
-@router.get("/plugins/{plugin_id}/info", dependencies=[Depends(oauth2_scheme)])
-async def get_plugin_info(plugin_id: str, current_user: User = Depends(get_current_user)):
+@router.get("/plugins/{plugin_id}/info")
+async def get_plugin_info(plugin_id: str, auth: AuthContext = Depends(require_user)):
     """Get information about a specific plugin."""
     # Log the request
-    logger.info(f"Getting plugin info for plugin {plugin_id} and user {current_user.id}")
+    logger.info(f"Getting plugin info for plugin {plugin_id} and user {auth.user_id}")
     
     try:
         # Ensure plugin manager is initialized
@@ -227,10 +219,10 @@ async def get_plugin_info(plugin_id: str, current_user: User = Depends(get_curre
             await plugin_manager.initialize()
         
         # Get plugin info
-        plugin_info = await plugin_manager.get_plugin_info(plugin_id, user_id=current_user.id)
+        plugin_info = await plugin_manager.get_plugin_info(plugin_id, user_id=auth.user_id)
         
         # Log success
-        logger.info(f"Successfully retrieved plugin info for plugin {plugin_id} and user {current_user.id}")
+        logger.info(f"Successfully retrieved plugin info for plugin {plugin_id} and user {auth.user_id}")
         
         return plugin_info
     except HTTPException:
@@ -238,35 +230,33 @@ async def get_plugin_info(plugin_id: str, current_user: User = Depends(get_curre
         raise
     except Exception as e:
         # Log the error
-        logger.error("Error getting plugin info", plugin_id=plugin_id, user_id=current_user.id, error=str(e))
+        logger.error("Error getting plugin info", plugin_id=plugin_id, user_id=auth.user_id, error=str(e))
         raise HTTPException(status_code=404, detail=str(e))
 
-@router.post("/plugins/{plugin_slug}/register", dependencies=[Depends(oauth2_scheme)])
+@router.post("/plugins/{plugin_slug}/register")
 async def register_plugin(
     plugin_slug: str,
     plugin_info: Dict[str, Any] = Body(...),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    auth: AuthContext = Depends(require_user)
 ):
     """Register a new plugin."""
     try:
-        # Ensure plugin manager is initialized
         if not plugin_manager._initialized:
             await plugin_manager.initialize()
             
-        # Generate a unique plugin_id
-        plugin_id = f"{current_user.id}_{plugin_slug}"
+        plugin_id = f"{auth.user_id}_{plugin_slug}"
         
         # Set plugin ID and slug in the info
         plugin_info["id"] = plugin_id
         plugin_info["plugin_slug"] = plugin_slug
-        plugin_info["user_id"] = current_user.id
+        plugin_info["user_id"] = auth.user_id
         
         # Check if plugin with this slug already exists for this user
         existing_plugin = await db.execute(
             select(Plugin).where(
                 Plugin.plugin_slug == plugin_slug,
-                Plugin.user_id == current_user.id
+                Plugin.user_id == auth.user_id
             )
         )
         if existing_plugin.scalars().first():
@@ -280,22 +270,22 @@ async def register_plugin(
         await repo.insert_plugin(plugin_info)
         
         # Create user-specific plugin directory if it doesn't exist
-        user_plugin_dir = PLUGINS_DIR / current_user.id / plugin_slug
+        user_plugin_dir = PLUGINS_DIR / auth.user_id / plugin_slug
         user_plugin_dir.mkdir(parents=True, exist_ok=True)
         
         # Reload plugin in manager
-        await plugin_manager.reload_plugin(plugin_id, user_id=current_user.id)
+        await plugin_manager.reload_plugin(plugin_id, user_id=auth.user_id)
         
         return {"status": "success", "message": f"Plugin {plugin_slug} registered successfully"}
     except Exception as e:
         logger.error("Error registering plugin", plugin_slug=plugin_slug, error=str(e))
         raise HTTPException(status_code=400, detail=str(e))
 
-@router.delete("/plugins/{plugin_id}", dependencies=[Depends(oauth2_scheme)])
+@router.delete("/plugins/{plugin_id}")
 async def unregister_plugin(
     plugin_id: str,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    auth: AuthContext = Depends(require_user)
 ):
     """Unregister a plugin."""
     try:
@@ -307,7 +297,7 @@ async def unregister_plugin(
         plugin = await db.execute(
             select(Plugin).where(
                 Plugin.id == plugin_id,
-                Plugin.user_id == current_user.id
+                Plugin.user_id == auth.user_id
             )
         )
         if not plugin.scalars().first():
@@ -327,8 +317,8 @@ async def unregister_plugin(
         logger.error("Error unregistering plugin", plugin_id=plugin_id, error=str(e))
         raise HTTPException(status_code=400, detail=str(e))
 
-@router.post("/plugins/refresh-cache", dependencies=[Depends(oauth2_scheme)])
-async def refresh_plugin_cache(current_user: User = Depends(get_current_user)):
+@router.post("/plugins/refresh-cache")
+async def refresh_plugin_cache(auth: AuthContext = Depends(require_user)):
     """Refresh the plugin cache by reloading all plugin configurations."""
     try:
         # Ensure plugin manager is initialized
@@ -345,7 +335,7 @@ async def refresh_plugin_cache(current_user: User = Depends(get_current_user)):
 
 # Plugin Manager API Endpoints
 
-@router.get("/plugins/manager", dependencies=[Depends(oauth2_scheme)])
+@router.get("/plugins/manager")
 async def get_plugins_for_manager(
     search: Optional[str] = None,
     category: Optional[str] = None,
@@ -353,7 +343,7 @@ async def get_plugins_for_manager(
     page: int = Query(1, ge=1),
     pageSize: int = Query(16, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    auth: AuthContext = Depends(require_user)
 ):
     """
     Get all modules with optional filtering for the plugin manager.
@@ -370,7 +360,7 @@ async def get_plugins_for_manager(
         tag_list = tags.split(',') if tags else []
         
         # Build query for modules
-        query = select(Module).where(Module.user_id == current_user.id)
+        query = select(Module).where(Module.user_id == auth.user_id)
         
         # Apply filters
         if search:
@@ -428,16 +418,16 @@ async def get_plugins_for_manager(
         logger.error("Error getting modules for manager", error=str(e))
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.get("/plugins/categories", dependencies=[Depends(oauth2_scheme)])
+@router.get("/plugins/categories")
 async def get_categories(
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    auth: AuthContext = Depends(require_user)
 ):
     """Get all available module categories."""
     try:
         # Query distinct categories from modules for the current user
         result = await db.execute(
-            select(Module.category).distinct().where(Module.user_id == current_user.id)
+            select(Module.category).distinct().where(Module.user_id == auth.user_id)
         )
         categories = [row[0] for row in result.all() if row[0]]
         
@@ -446,15 +436,15 @@ async def get_categories(
         logger.error("Error getting categories", error=str(e))
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.get("/plugins/tags", dependencies=[Depends(oauth2_scheme)])
+@router.get("/plugins/tags")
 async def get_tags(
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    auth: AuthContext = Depends(require_user)
 ):
     """Get all available module tags."""
     try:
         # Query all modules to extract tags for the current user
-        result = await db.execute(select(Module.tags).where(Module.user_id == current_user.id))
+        result = await db.execute(select(Module.tags).where(Module.user_id == auth.user_id))
         all_tags = []
         
         # Extract tags from each module
@@ -475,26 +465,25 @@ async def get_tags(
         logger.error("Error getting tags", error=str(e))
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.get("/plugins/{plugin_id}/modules", dependencies=[Depends(oauth2_scheme)])
+@router.get("/plugins/{plugin_id}/modules")
 async def get_plugin_modules(
     plugin_id: str,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    auth: AuthContext = Depends(require_user)
 ):
     """Get all modules for a specific plugin."""
     try:
-        # Check if plugin belongs to current user
         plugin = await db.execute(
             select(Plugin).where(
                 Plugin.id == plugin_id,
-                Plugin.user_id == current_user.id
+                Plugin.user_id == auth.user_id
             )
         )
         if not plugin.scalars().first():
             raise HTTPException(status_code=404, detail=f"Plugin {plugin_id} not found or you don't have permission")
             
         repo = PluginRepository(db)
-        modules = await repo.get_plugin_modules(plugin_id, user_id=current_user.id)
+        modules = await repo.get_plugin_modules(plugin_id, user_id=auth.user_id)
         
         # Parse tags from JSON string for each module
         for module in modules:
@@ -511,12 +500,12 @@ async def get_plugin_modules(
         logger.error("Error getting plugin modules", plugin_id=plugin_id, error=str(e))
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.get("/plugins/{plugin_id}/modules/{module_id}", dependencies=[Depends(oauth2_scheme)])
+@router.get("/plugins/{plugin_id}/modules/{module_id}")
 async def get_module_detail(
     plugin_id: str,
     module_id: str,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    auth: AuthContext = Depends(require_user)
 ):
     """Get details for a specific module."""
     try:
@@ -531,7 +520,7 @@ async def get_module_detail(
         """)
         module_result = await db.execute(
             module_query,
-            {"plugin_id": plugin_id, "module_id": module_id, "user_id": current_user.id}
+            {"plugin_id": plugin_id, "module_id": module_id, "user_id": auth.user_id}
         )
         module_row = module_result.fetchone()
         
@@ -548,7 +537,7 @@ async def get_module_detail(
         """)
         plugin_result = await db.execute(
             plugin_query,
-            {"plugin_id": plugin_id, "user_id": current_user.id}
+            {"plugin_id": plugin_id, "user_id": auth.user_id}
         )
         plugin_row = plugin_result.fetchone()
         
@@ -725,7 +714,8 @@ async def get_module_detail(
 async def get_module_detail_direct(
     plugin_id: str,
     module_id: str,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    auth: AuthContext = Depends(require_user),
 ):
     """Direct endpoint for module details that matches the frontend path."""
     try:
@@ -870,10 +860,10 @@ async def get_module_detail_direct(
 
 # Add a simple test endpoint
 @router.get("/plugins/test")
-async def test_endpoint(current_user: User = Depends(get_current_user)):
+async def test_endpoint(auth: AuthContext = Depends(require_user)):
     """Simple test endpoint to verify the router is working."""
-    logger.info("Test endpoint called by user", user_id=current_user.id)
-    return {"message": "Plugin router is working!", "user_id": current_user.id}
+    logger.info("Test endpoint called by user", user_id=auth.user_id)
+    return {"message": "Plugin router is working!", "user_id": auth.user_id}
 
 # Add a simple module data endpoint
 @router.get("/plugins/simple/{plugin_id}/modules/{module_id}")
@@ -881,7 +871,7 @@ async def get_simple_module_detail(
     plugin_id: str,
     module_id: str,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    auth: AuthContext = Depends(require_user)
 ):
     """Simple endpoint that directly returns module data from the database."""
     logger.info("Simple module endpoint called", plugin_id=plugin_id, module_id=module_id)
@@ -894,7 +884,7 @@ async def get_simple_module_detail(
         """)
         module_result = await db.execute(
             module_query,
-            {"plugin_id": plugin_id, "module_id": module_id, "user_id": current_user.id}
+            {"plugin_id": plugin_id, "module_id": module_id, "user_id": auth.user_id}
         )
         module_row = module_result.fetchone()
         
@@ -909,7 +899,7 @@ async def get_simple_module_detail(
         """)
         plugin_result = await db.execute(
             plugin_query,
-            {"plugin_id": plugin_id, "user_id": current_user.id}
+            {"plugin_id": plugin_id, "user_id": auth.user_id}
         )
         plugin_row = plugin_result.fetchone()
         
@@ -944,7 +934,7 @@ async def update_plugin_status(
     plugin_id: str,
     data: Dict[str, Any] = Body(...),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    auth: AuthContext = Depends(require_user)
 ):
     """Enable or disable a plugin."""
     try:
@@ -957,7 +947,7 @@ async def update_plugin_status(
         plugin = await db.execute(
             select(Plugin).where(
                 Plugin.id == plugin_id,
-                Plugin.user_id == current_user.id
+                Plugin.user_id == auth.user_id
             )
         )
         if not plugin.scalars().first():
@@ -982,7 +972,7 @@ async def update_module_status(
     module_id: str,
     data: Dict[str, Any] = Body(...),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    auth: AuthContext = Depends(require_user)
 ):
     """Enable or disable a module."""
     try:
@@ -996,7 +986,7 @@ async def update_module_status(
             select(Module).where(
                 Module.plugin_id == plugin_id,
                 Module.id == module_id,
-                Module.user_id == current_user.id
+                Module.user_id == auth.user_id
             )
         )
         if not module.scalars().first():
@@ -1022,11 +1012,11 @@ async def update_module_status(
 async def get_plugin_by_slug(
     plugin_slug: str,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    auth: AuthContext = Depends(require_user)
 ):
     """Get a plugin by its slug."""
     repo = PluginRepository(db)
-    plugin = await repo.get_plugin_by_slug(plugin_slug, current_user.id)
+    plugin = await repo.get_plugin_by_slug(plugin_slug, auth.user_id)
     
     if not plugin:
         raise HTTPException(status_code=404, detail=f"Plugin {plugin_slug} not found")
@@ -1038,12 +1028,12 @@ router.include_router(lifecycle_router, tags=["Plugin Lifecycle Management"])
 
 
 # Add this route at the end so it doesn't catch other routes
-@router.get("/plugins/{plugin_id}/{path:path}", dependencies=[Depends(oauth2_scheme)])
+@router.get("/plugins/{plugin_id}/{path:path}")
 async def serve_plugin_static(
     plugin_id: str,
     path: str,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    auth: AuthContext = Depends(require_user)
 ):
     """Serve static files from plugin directory."""
     # Skip if the path starts with "modules/" to avoid catching module endpoints
@@ -1060,7 +1050,7 @@ async def serve_plugin_static(
     plugin_query = await db.execute(
         select(Plugin).where(
             Plugin.id == plugin_id,
-            Plugin.user_id == current_user.id
+            Plugin.user_id == auth.user_id
         )
     )
     plugin = plugin_query.scalars().first()
@@ -1071,7 +1061,7 @@ async def serve_plugin_static(
         plugin_query = await db.execute(
             select(Plugin).where(
                 Plugin.plugin_slug == plugin_id,
-                Plugin.user_id == current_user.id
+                Plugin.user_id == auth.user_id
             )
         )
         plugin = plugin_query.scalars().first()

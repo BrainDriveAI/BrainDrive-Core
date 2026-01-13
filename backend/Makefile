@@ -1,6 +1,11 @@
 # Database Migration Management Commands
 
-.PHONY: validate-migrations verify-db test-migrations fix-migration-conflict advanced-tests monitor-health recovery-status
+.PHONY: validate-migrations verify-db test-migrations fix-migration-conflict advanced-tests monitor-health recovery-status check-security
+
+# Security pattern checks
+check-security:
+	@echo "🔒 Checking security patterns..."
+	@python scripts/check_security_patterns.py
 
 # Validate all migrations for conflicts
 validate-migrations:

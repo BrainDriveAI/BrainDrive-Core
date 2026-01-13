@@ -5,10 +5,12 @@ from fastapi.exceptions import RequestValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 from typing import List, Optional
+import asyncio
 from app.core.database import get_db
-from app.core.security import get_current_user
+from app.core.auth_deps import require_user, require_admin, optional_user
+from app.core.auth_context import AuthContext
 from app.models.settings import SettingDefinition, SettingInstance, SettingScope
-from app.models.user import User
+from app.services.settings_service import get_user_setting_instance, ensure_setting_instance_belongs_to_user
 from app.schemas.settings import (
     SettingDefinitionCreate,
     SettingDefinitionUpdate,
@@ -22,8 +24,33 @@ import uuid
 import json
 from sqlalchemy import text, func
 
-router = APIRouter(prefix="/settings")
+router = APIRouter(prefix="/settings", dependencies=[Depends(require_user)])
 logger = logging.getLogger(__name__)
+
+
+def _log_settings_audit_background(
+    request: Request, 
+    event_type: str, 
+    user_id: str, 
+    resource_id: str = None,
+    metadata: dict = None
+):
+    """Schedule audit log write in background for settings changes."""
+    async def _write():
+        try:
+            from app.core.audit import audit_logger, AuditEventType
+            await audit_logger.log_admin_action(
+                request=request,
+                user_id=user_id,
+                event_type=AuditEventType(event_type),
+                resource_type="setting",
+                resource_id=resource_id,
+                metadata=metadata,
+            )
+        except Exception as e:
+            logger.warning(f"Failed to write settings audit log: {e}")
+    
+    asyncio.create_task(_write())
 
 def mask_sensitive_data(definition_id: str, value: any) -> any:
     """
@@ -130,18 +157,13 @@ async def get_definition_by_id(db, definition_id: str):
 
 @router.post("/definitions", response_model=SettingDefinitionResponse)
 async def create_setting_definition(
+    request: Request,
     definition: SettingDefinitionCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    auth: AuthContext = Depends(require_admin)
 ):
     """Create a new setting definition."""
     try:
-        if not current_user.is_admin:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Only admins can create setting definitions"
-            )
-
         # Check if definition already exists using direct SQL
         check_query = text("SELECT id FROM settings_definitions WHERE name = :name")
         result = await db.execute(check_query, {"name": definition.name})
@@ -229,6 +251,13 @@ async def create_setting_definition(
             "updated_at": row[11]
         }
         
+        # Log admin action
+        _log_settings_audit_background(
+            request, "admin.settings_created", auth.user_id,
+            resource_id=definition.id,
+            metadata={"name": definition.name, "category": definition.category}
+        )
+        
         return setting_def
     except HTTPException as e:
         # Re-raise HTTP exceptions
@@ -249,7 +278,7 @@ async def get_setting_definitions(
     category: Optional[str] = None,
     scope: Optional[SettingScope] = None,
     db: AsyncSession = Depends(get_db),
-    current_user: Optional[User] = Depends(get_current_user)
+    auth: Optional[AuthContext] = Depends(optional_user)
 ):
     """Get all setting definitions, optionally filtered by category and scope."""
     try:
@@ -326,19 +355,14 @@ async def get_setting_definitions(
 
 @router.patch("/definitions/{definition_id}", response_model=SettingDefinitionResponse)
 async def update_setting_definition(
+    request: Request,
     definition_id: str,
     update_data: SettingDefinitionUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    auth: AuthContext = Depends(require_admin)
 ):
     """Update a setting definition (partial update)."""
     try:
-        if not current_user.is_admin:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Only admins can update setting definitions"
-            )
-
         # Check if the definition exists using direct SQL
         check_query = text("SELECT id FROM settings_definitions WHERE id = :id")
         result = await db.execute(check_query, {"id": definition_id})
@@ -389,6 +413,13 @@ async def update_setting_definition(
         await db.execute(update_query, params)
         await db.commit()
         
+        # Log admin action
+        _log_settings_audit_background(
+            request, "admin.settings_updated", auth.user_id,
+            resource_id=definition_id,
+            metadata={"fields_updated": list(update_dict.keys())}
+        )
+        
         # Fetch the updated definition
         return await get_definition_by_id(db, definition_id)
     except HTTPException as e:
@@ -411,16 +442,10 @@ async def put_setting_definition(
     definition_id: str,
     update_data: SettingDefinitionCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    auth: AuthContext = Depends(require_admin)
 ):
     """Update a setting definition (full update)."""
     try:
-        if not current_user.is_admin:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Only admins can update setting definitions"
-            )
-
         # Check if the definition exists using direct SQL
         check_query = text("SELECT id FROM settings_definitions WHERE id = :id")
         result = await db.execute(check_query, {"id": definition_id})
@@ -501,18 +526,13 @@ async def put_setting_definition(
 
 @router.delete("/definitions/{definition_id}", response_model=dict)
 async def delete_setting_definition(
+    request: Request,
     definition_id: str,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    auth: AuthContext = Depends(require_admin)
 ):
     """Delete a setting definition."""
     try:
-        if not current_user.is_admin:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Only admins can delete setting definitions"
-            )
-
         # Check if the definition exists using direct SQL
         check_query = text("SELECT id FROM settings_definitions WHERE id = :id")
         result = await db.execute(check_query, {"id": definition_id})
@@ -545,6 +565,12 @@ async def delete_setting_definition(
         await db.execute(delete_query, {"id": definition_id})
         await db.commit()
         
+        # Log admin action
+        _log_settings_audit_background(
+            request, "admin.settings_deleted", auth.user_id,
+            resource_id=definition_id
+        )
+        
         return {"message": f"Setting definition {definition_id} deleted successfully"}
     except HTTPException as e:
         # Re-raise HTTP exceptions
@@ -566,11 +592,11 @@ async def delete_setting_definition(
 async def create_setting_instance(
     instance_data: SettingInstanceCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: Optional[User] = Depends(get_current_user)
+    auth: Optional[AuthContext] = Depends(optional_user)
 ):
     """Create a new setting instance."""
     logger.info(f"Creating setting instance with data: {instance_data.dict()}")
-    logger.debug(f"Current user: {current_user}")
+    logger.debug(f"Current user: {auth}")
     
     try:
         # Ensure scope is properly converted to enum
@@ -622,18 +648,16 @@ async def create_setting_instance(
             
             # Check access permission
             if instance_scope.lower() in ['user', 'user_page']:
-                if not current_user:
+                if not auth:
                     raise HTTPException(
                         status_code=status.HTTP_401_UNAUTHORIZED,
                         detail="Authentication required for user settings"
                     )
-                if str(instance_user_id) != str(current_user.id):
-                    raise HTTPException(
-                        status_code=status.HTTP_403_FORBIDDEN,
-                        detail="Access denied to this setting instance"
-                    )
+                # Verify ownership
+                instance_dict = {"user_id": instance_user_id}
+                ensure_setting_instance_belongs_to_user(instance_dict, auth)
             elif instance_scope.lower() == 'system':
-                if not current_user or not current_user.is_admin:
+                if not auth or not auth.is_admin:
                     raise HTTPException(
                         status_code=status.HTTP_403_FORBIDDEN,
                         detail="Admin privileges required for system settings"
@@ -675,18 +699,16 @@ async def create_setting_instance(
                 
                 # Check access permission
                 if instance_scope.lower() in ['user', 'user_page']:
-                    if not current_user:
+                    if not auth:
                         raise HTTPException(
                             status_code=status.HTTP_401_UNAUTHORIZED,
                             detail="Authentication required for user settings"
                         )
-                    if str(instance_user_id) != str(current_user.id):
-                        raise HTTPException(
-                            status_code=status.HTTP_403_FORBIDDEN,
-                            detail="Access denied to this setting instance"
-                        )
+                    # Verify ownership
+                    instance_dict = {"user_id": instance_user_id}
+                    ensure_setting_instance_belongs_to_user(instance_dict, auth)
                 elif instance_scope.lower() == 'system':
-                    if not current_user or not current_user.is_admin:
+                    if not auth or not auth.is_admin:
                         raise HTTPException(
                             status_code=status.HTTP_403_FORBIDDEN,
                             detail="Admin privileges required for system settings"
@@ -694,8 +716,8 @@ async def create_setting_instance(
                 
                 # Handle special case for 'current' user_id
                 user_id_value = instance_data.user_id
-                if user_id_value == 'current' and current_user:
-                    user_id_value = str(current_user.id)
+                if user_id_value == 'current' and auth:
+                    user_id_value = str(auth.user_id)
                 
                 # Use SQLAlchemy model to update the instance (enables encryption)
                 logger.info("Using SQLAlchemy model to update the instance")
@@ -779,17 +801,20 @@ async def create_setting_instance(
         
         # Ensure user context is set correctly
         if instance_data.scope == SettingScope.USER or instance_data.scope == SettingScope.USER_PAGE:
+            # Allow "current" keyword using auth context
             if instance_data.user_id == "current":
-                if not current_user:
+                if not auth:
                     raise HTTPException(
                         status_code=status.HTTP_401_UNAUTHORIZED,
                         detail="Authentication required for user settings"
                     )
-                logger.info(f"Resolving user_id 'current' to: {current_user.id}")
-                instance_data.user_id = str(current_user.id)
-            elif not instance_data.user_id and current_user:
-                logger.info(f"Setting user_id to current user: {current_user.id}")
-                instance_data.user_id = str(current_user.id)
+                logger.info(f"Resolving user_id 'current' to: {auth.user_id}")
+                instance_data.user_id = str(auth.user_id)
+
+            # Auto-inject authenticated user if missing
+            if not instance_data.user_id and auth:
+                logger.info(f"Setting user_id to current user: {auth.user_id}")
+                instance_data.user_id = str(auth.user_id)
         
         try:
             # Get the definition to validate the value and scopes using direct SQL
@@ -951,8 +976,8 @@ async def create_setting_instance(
             
             # Handle special case for 'current' user_id
             user_id_value = instance_data.user_id
-            if user_id_value == 'current' and current_user:
-                user_id_value = str(current_user.id)
+            if user_id_value == 'current' and auth:
+                user_id_value = str(auth.user_id)
             
             # Convert value to JSON string if it's not already
             value_json = instance_data.value
@@ -1048,30 +1073,30 @@ async def get_setting_instances(
     user_id: Optional[str] = None,
     page_id: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
-    current_user: Optional[User] = Depends(get_current_user)
+    auth: Optional[AuthContext] = Depends(optional_user)
 ):
     """Get settings instances based on filters."""
     logger.info(f"Getting settings instances with filters: definition_id={definition_id}, scope={scope}, user_id={user_id}, page_id={page_id}")
     
     # If user_id is specified but no current user, require authentication
-    if user_id and not current_user:
+    if user_id and not auth:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Authentication required to access user settings"
         )
 
     # If user_id is 'current', use the current user's ID
-    if user_id == "current" and current_user:
-        user_id = str(current_user.id)
+    if user_id == "current" and auth:
+        user_id = str(auth.user_id)
         logger.info(f"Using current user ID: {user_id}")
-    elif user_id == "current" and not current_user:
+    elif user_id == "current" and not auth:
         logger.warning("User ID 'current' specified but no current user available")
         # Return empty list if no current user is available
         return []
     
     # If scope is 'user' but no user_id is provided, use the current user's ID
-    if scope and scope.lower() == "user" and not user_id and current_user:
-        user_id = str(current_user.id)
+    if scope and scope.lower() == "user" and not user_id and auth:
+        user_id = str(auth.user_id)
         logger.info(f"Scope is 'user' but no user_id provided, using current user ID: {user_id}")
 
     # Handle scope conversion - ensure it's lowercase for case-insensitive matching
@@ -1183,7 +1208,7 @@ async def get_setting_instances(
 async def get_setting_instance(
     instance_id: str,
     db: AsyncSession = Depends(get_db),
-    current_user: Optional[User] = Depends(get_current_user)
+    auth: Optional[AuthContext] = Depends(optional_user)
 ):
     """Get a specific setting instance by ID."""
     try:
@@ -1237,18 +1262,15 @@ async def get_setting_instance(
         # Check access permission
         scope_value = instance["scope"]
         if scope_value in [SettingScope.USER.value, SettingScope.USER_PAGE.value]:
-            if not current_user:
+            if not auth:
                 raise HTTPException(
                     status_code=status.HTTP_401_UNAUTHORIZED,
                     detail="Authentication required for user settings"
                 )
-            if str(instance["user_id"]) != str(current_user.id):
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail="Access denied to this setting instance"
-                )
+            # Verify ownership using service helper
+            ensure_setting_instance_belongs_to_user(instance, auth)
         elif scope_value == SettingScope.SYSTEM.value:
-            if not current_user or not current_user.is_admin:
+            if not auth or not auth.is_admin:
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail="Admin privileges required for system settings"
@@ -1274,7 +1296,7 @@ async def update_setting_instance(
     instance_id: str,
     update_data: SettingInstanceUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user: Optional[User] = Depends(get_current_user)
+    auth: Optional[AuthContext] = Depends(optional_user)
 ):
     """Update a setting instance."""
     try:
@@ -1310,18 +1332,15 @@ async def update_setting_instance(
         # Check access permission
         scope_value = instance["scope"]
         if scope_value in [SettingScope.USER.value, SettingScope.USER_PAGE.value]:
-            if not current_user:
+            if not auth:
                 raise HTTPException(
                     status_code=status.HTTP_401_UNAUTHORIZED,
                     detail="Authentication required for user settings"
                 )
-            if str(instance["user_id"]) != str(current_user.id):
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail="Access denied to this setting instance"
-                )
+            # Verify ownership using service helper
+            ensure_setting_instance_belongs_to_user(instance, auth)
         elif scope_value == SettingScope.SYSTEM.value:
-            if not current_user or not current_user.is_admin:
+            if not auth or not auth.is_admin:
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail="Admin privileges required for system settings"
@@ -1405,7 +1424,7 @@ async def put_setting_instance(
     instance_id: str,
     update_data: SettingInstanceCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: Optional[User] = Depends(get_current_user)
+    auth: Optional[AuthContext] = Depends(optional_user)
 ):
     """Update a setting instance with PUT (full replacement)."""
     try:
@@ -1441,18 +1460,15 @@ async def put_setting_instance(
         # Check access permission
         scope_value = instance["scope"]
         if scope_value in [SettingScope.USER.value, SettingScope.USER_PAGE.value]:
-            if not current_user:
+            if not auth:
                 raise HTTPException(
                     status_code=status.HTTP_401_UNAUTHORIZED,
                     detail="Authentication required for user settings"
                 )
-            if str(instance["user_id"]) != str(current_user.id):
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail="Access denied to this setting instance"
-                )
+            # Verify ownership using service helper
+            ensure_setting_instance_belongs_to_user(instance, auth)
         elif scope_value == SettingScope.SYSTEM.value:
-            if not current_user or not current_user.is_admin:
+            if not auth or not auth.is_admin:
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail="Admin privileges required for system settings"
@@ -1460,8 +1476,8 @@ async def put_setting_instance(
         
         # Handle special case for 'current' user_id
         user_id_value = update_data.user_id
-        if user_id_value == 'current' and current_user:
-            user_id_value = str(current_user.id)
+        if user_id_value == 'current' and auth:
+            user_id_value = str(auth.user_id)
         
         # Convert scope to string if it's an enum
         scope_value = update_data.scope
@@ -1547,7 +1563,7 @@ async def put_setting_instance(
 async def delete_setting_instance(
     instance_id: str,
     db: AsyncSession = Depends(get_db),
-    current_user: Optional[User] = Depends(get_current_user)
+    auth: Optional[AuthContext] = Depends(optional_user)
 ):
     """Delete a setting instance."""
     try:
@@ -1583,18 +1599,15 @@ async def delete_setting_instance(
         # Check access permission
         scope_value = instance["scope"]
         if scope_value in [SettingScope.USER.value, SettingScope.USER_PAGE.value]:
-            if not current_user:
+            if not auth:
                 raise HTTPException(
                     status_code=status.HTTP_401_UNAUTHORIZED,
                     detail="Authentication required for user settings"
                 )
-            if str(instance["user_id"]) != str(current_user.id):
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail="Access denied to this setting instance"
-                )
+            # Verify ownership using service helper
+            ensure_setting_instance_belongs_to_user(instance, auth)
         elif scope_value == SettingScope.SYSTEM.value:
-            if not current_user or not current_user.is_admin:
+            if not auth or not auth.is_admin:
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail="Admin privileges required for system settings"
@@ -1629,7 +1642,7 @@ async def delete_setting_instance(
 async def create_ollama_definition(
     data: dict,
     db: AsyncSession = Depends(get_db),
-    current_user: Optional[User] = Depends(get_current_user)
+    auth: Optional[AuthContext] = Depends(optional_user)
 ):
     """Create the Ollama settings definition directly."""
     try:
@@ -1694,7 +1707,7 @@ async def create_ollama_definition(
                     "serverName": data.get("serverName", "Default Ollama Server"),
                     "apiKey": data.get("apiKey", "")
                 }),
-                "user_id": str(current_user.id) if current_user else None
+                "user_id": str(auth.user_id) if auth else None
             }
         )
         

@@ -33,6 +33,7 @@ from app.models.job import (
     WorkerCapability,
     JobStatus,
 )
+from app.models.audit_log import AuditLog
 
 # Import relationships module last to establish relationships
 from app.models.relationships import *

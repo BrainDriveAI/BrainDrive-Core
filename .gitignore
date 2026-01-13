@@ -233,3 +233,7 @@ unused-report.md
 
 # Rule files
 .roorules
+
+# Internal documentation and planning (not for public release)
+forme/
+InitialSecurity.md

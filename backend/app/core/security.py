@@ -77,41 +77,14 @@ async def authenticate_user(db: AsyncSession, user_data: dict) -> Optional[User]
 def decode_access_token(token: str) -> dict:
     """Decode and validate an access token."""
     try:
-        logger.info(f"Decoding token: {token[:10]}...")
-        
-        # Log token parts for debugging (without exposing full token)
         parts = token.split('.')
         if len(parts) != 3:
-            logger.error(f"Invalid token format - expected 3 parts, got {len(parts)}")
             raise JWTError("Invalid token format")
-            
-        # Try to decode the payload part (without verification) to see what's in it
-        try:
-            import base64
-            import json
-            
-            # Pad the base64 string if needed
-            padded = parts[1] + "=" * ((4 - len(parts[1]) % 4) % 4)
-            decoded_bytes = base64.b64decode(padded)
-            payload_preview = json.loads(decoded_bytes)
-            
-            # Log relevant parts without exposing sensitive data
-            safe_payload = {
-                "exp": payload_preview.get("exp"),
-                "iat": payload_preview.get("iat"),
-                "has_sub": "sub" in payload_preview,
-                "token_type": payload_preview.get("token_type")
-            }
-            logger.info(f"Token payload preview (before verification): {safe_payload}")
-        except Exception as e:
-            logger.warning(f"Could not preview token payload: {e}")
-        
-        # Actually verify and decode the token
+
         payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
-        logger.info("Token successfully verified and decoded")
         return payload
     except JWTError as e:
-        logger.error(f"Error decoding token: {e}")
+        logger.error("Error decoding token")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=f"Could not validate credentials: {str(e)}",
@@ -155,9 +128,6 @@ async def get_current_user(token: str = Depends(oauth2_scheme), db: AsyncSession
             
             if user:
                 logger.info(f"Found user with ID: {user_id}")
-                # Temporarily set is_admin to True for all users until roles are implemented
-                user.is_admin = True
-                logger.info(f"Temporarily setting is_admin=True for user {user_id}")
             else:
                 logger.error(f"No user found with ID: {user_id}")
                 raise HTTPException(status_code=401, detail="User not found")

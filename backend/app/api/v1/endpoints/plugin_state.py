@@ -10,9 +10,11 @@ from datetime import datetime, timedelta
 import logging
 
 from app.core.database import get_db
-from app.core.security import get_current_user
+from app.core.auth_deps import require_user
+from app.core.auth_context import AuthContext
 from app.models.user import User
 from app.models.plugin_state import PluginState, PluginStateHistory, PluginStateConfig
+from app.services.plugin_state_service import get_user_plugin_state
 from app.schemas.plugin_state import (
     PluginStateCreate,
     PluginStateUpdate,
@@ -86,14 +88,14 @@ async def create_plugin_state(
     background_tasks: BackgroundTasks,
     request: Request,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    auth: AuthContext = Depends(require_user)
 ):
     """Create a new plugin state record."""
     try:
         # Check if state already exists
         existing_query = select(PluginState).where(
             and_(
-                PluginState.user_id == current_user.id,
+                PluginState.user_id == auth.user_id,
                 PluginState.plugin_id == state_create.plugin_id,
                 PluginState.page_id == state_create.page_id,
                 PluginState.state_key == state_create.state_key
@@ -113,7 +115,7 @@ async def create_plugin_state(
         
         # Create new state
         plugin_state = PluginState(
-            user_id=current_user.id,
+            user_id=auth.user_id,
             plugin_id=state_create.plugin_id,
             page_id=state_create.page_id,
             state_key=state_create.state_key,
@@ -158,12 +160,12 @@ async def create_plugin_state(
 async def get_plugin_states(
     query: PluginStateQuery = Depends(),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    auth: AuthContext = Depends(require_user)
 ):
     """Get plugin states for the current user with filtering."""
     try:
         # Build query
-        stmt = select(PluginState).where(PluginState.user_id == current_user.id)
+        stmt = select(PluginState).where(PluginState.user_id == auth.user_id)
         
         # Apply filters
         if query.plugin_id:
@@ -210,24 +212,12 @@ async def get_plugin_states(
 async def get_plugin_state(
     state_id: str,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    auth: AuthContext = Depends(require_user)
 ):
     """Get a specific plugin state by ID."""
     try:
-        stmt = select(PluginState).where(
-            and_(
-                PluginState.id == state_id,
-                PluginState.user_id == current_user.id
-            )
-        )
-        result = await db.execute(stmt)
-        state = result.scalar_one_or_none()
-        
-        if not state:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Plugin state not found"
-            )
+        # Get plugin state and ensure it belongs to current user
+        state = await get_user_plugin_state(db, state_id, auth)
         
         # Update access tracking
         state.last_accessed = datetime.utcnow()
@@ -258,24 +248,12 @@ async def update_plugin_state(
     background_tasks: BackgroundTasks,
     request: Request,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    auth: AuthContext = Depends(require_user)
 ):
     """Update a plugin state record."""
     try:
-        stmt = select(PluginState).where(
-            and_(
-                PluginState.id == state_id,
-                PluginState.user_id == current_user.id
-            )
-        )
-        result = await db.execute(stmt)
-        state = result.scalar_one_or_none()
-        
-        if not state:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Plugin state not found"
-            )
+        # Get plugin state and ensure it belongs to current user
+        state = await get_user_plugin_state(db, state_id, auth)
         
         # Store old data for history
         old_data = decompress_state_data(state.state_data, state.compression_type)
@@ -333,24 +311,12 @@ async def delete_plugin_state(
     background_tasks: BackgroundTasks,
     request: Request,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    auth: AuthContext = Depends(require_user)
 ):
     """Delete a plugin state record."""
     try:
-        stmt = select(PluginState).where(
-            and_(
-                PluginState.id == state_id,
-                PluginState.user_id == current_user.id
-            )
-        )
-        result = await db.execute(stmt)
-        state = result.scalar_one_or_none()
-        
-        if not state:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Plugin state not found"
-            )
+        # Get plugin state and ensure it belongs to current user
+        state = await get_user_plugin_state(db, state_id, auth)
         
         # Store data for history before deletion
         state_data = decompress_state_data(state.state_data, state.compression_type)
@@ -388,7 +354,7 @@ async def create_plugin_states_bulk(
     background_tasks: BackgroundTasks,
     request: Request,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    auth: AuthContext = Depends(require_user)
 ):
     """Create multiple plugin states in bulk."""
     created_states = []
@@ -400,7 +366,7 @@ async def create_plugin_states_bulk(
                 # Check if state already exists
                 existing_query = select(PluginState).where(
                     and_(
-                        PluginState.user_id == current_user.id,
+                        PluginState.user_id == auth.user_id,
                         PluginState.plugin_id == state_create.plugin_id,
                         PluginState.page_id == state_create.page_id,
                         PluginState.state_key == state_create.state_key
@@ -422,7 +388,7 @@ async def create_plugin_states_bulk(
                 
                 # Create state
                 plugin_state = PluginState(
-                    user_id=current_user.id,
+                    user_id=auth.user_id,
                     plugin_id=state_create.plugin_id,
                     page_id=state_create.page_id,
                     state_key=state_create.state_key,
@@ -475,21 +441,21 @@ async def create_plugin_states_bulk(
 @router.get("/stats", response_model=PluginStateStats)
 async def get_plugin_state_stats(
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    auth: AuthContext = Depends(require_user)
 ):
     """Get plugin state statistics for the current user."""
     try:
         # Get basic counts
-        total_query = select(func.count(PluginState.id)).where(PluginState.user_id == current_user.id)
+        total_query = select(func.count(PluginState.id)).where(PluginState.user_id == auth.user_id)
         active_query = select(func.count(PluginState.id)).where(
-            and_(PluginState.user_id == current_user.id, PluginState.is_active == True)
+            and_(PluginState.user_id == auth.user_id, PluginState.is_active == True)
         )
-        size_query = select(func.sum(PluginState.state_size)).where(PluginState.user_id == current_user.id)
+        size_query = select(func.sum(PluginState.state_size)).where(PluginState.user_id == auth.user_id)
         plugins_query = select(func.count(func.distinct(PluginState.plugin_id))).where(
-            PluginState.user_id == current_user.id
+            PluginState.user_id == auth.user_id
         )
         last_activity_query = select(func.max(PluginState.last_accessed)).where(
-            PluginState.user_id == current_user.id
+            PluginState.user_id == auth.user_id
         )
         
         total_result = await db.execute(total_query)
@@ -526,7 +492,7 @@ async def get_plugin_state_stats(
 @router.delete("/cleanup")
 async def cleanup_expired_states(
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    auth: AuthContext = Depends(require_user)
 ):
     """Clean up expired plugin states."""
     try:
@@ -534,7 +500,7 @@ async def cleanup_expired_states(
         now = datetime.utcnow()
         delete_query = delete(PluginState).where(
             and_(
-                PluginState.user_id == current_user.id,
+                PluginState.user_id == auth.user_id,
                 PluginState.ttl_expires_at < now
             )
         )

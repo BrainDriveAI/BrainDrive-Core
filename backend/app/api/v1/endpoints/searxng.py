@@ -2,7 +2,8 @@ from fastapi import APIRouter, HTTPException, Query, Depends
 from typing import Optional, List, Dict, Any
 import httpx
 import asyncio
-from app.core.security import get_current_user
+from app.core.auth_deps import require_user
+from app.core.auth_context import AuthContext
 from app.models.user import User
 import structlog
 from bs4 import BeautifulSoup
@@ -23,7 +24,7 @@ async def search_web(
     time_range: Optional[str] = Query(None, description="Time range filter"),
     safesearch: int = Query(1, description="Safe search level (0-2)"),
     engines: Optional[str] = Query(None, description="Comma-separated list of engines"),
-    current_user: User = Depends(get_current_user)
+    auth: AuthContext = Depends(require_user)
 ) -> Dict[str, Any]:
     """
     Proxy web search requests to SearXNG server.
@@ -49,7 +50,7 @@ async def search_web(
         params["engines"] = engines
     
     try:
-        logger.info(f"🔍 Proxying search request to SearXNG", query=q, user_id=current_user.id)
+        logger.info(f"🔍 Proxying search request to SearXNG", query=q, user_id=auth.user_id)
         
         async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
             response = await client.get(
@@ -76,18 +77,18 @@ async def search_web(
             logger.info(f"✅ Search completed successfully", 
                        query=q, 
                        results_count=search_results.get("number_of_results", 0),
-                       user_id=current_user.id)
+                       user_id=auth.user_id)
             
             return search_results
             
     except httpx.TimeoutException:
-        logger.error(f"SearXNG request timeout", query=q, user_id=current_user.id)
+        logger.error(f"SearXNG request timeout", query=q, user_id=auth.user_id)
         raise HTTPException(
             status_code=504, 
             detail="Search service timeout - please try again"
         )
     except httpx.ConnectError:
-        logger.error(f"Cannot connect to SearXNG", query=q, user_id=current_user.id)
+        logger.error(f"Cannot connect to SearXNG", query=q, user_id=auth.user_id)
         raise HTTPException(
             status_code=502, 
             detail="Search service is not available. Please ensure SearXNG is running."
@@ -96,7 +97,7 @@ async def search_web(
         logger.error(f"Unexpected error during search", 
                     query=q, 
                     error=str(e), 
-                    user_id=current_user.id)
+                    user_id=auth.user_id)
         raise HTTPException(
             status_code=500, 
             detail="Internal server error during search"
@@ -106,7 +107,7 @@ async def search_web(
 async def scrape_urls(
     urls: List[str],
     max_content_length: int = Query(5000, description="Maximum content length per URL"),
-    current_user: User = Depends(get_current_user)
+    auth: AuthContext = Depends(require_user)
 ) -> Dict[str, Any]:
     """
     Scrape content from multiple URLs and return cleaned text.
@@ -124,7 +125,7 @@ async def scrape_urls(
     async def scrape_single_url(url: str) -> Dict[str, Any]:
         """Scrape a single URL and return cleaned content"""
         try:
-            logger.info(f"🕷️ Scraping URL", url=url, user_id=current_user.id)
+            logger.info(f"🕷️ Scraping URL", url=url, user_id=auth.user_id)
             
             async with httpx.AsyncClient(
                 timeout=10.0,
@@ -181,7 +182,7 @@ async def scrape_urls(
                 logger.info(f"✅ Successfully scraped URL", 
                            url=url, 
                            content_length=len(text),
-                           user_id=current_user.id)
+                           user_id=auth.user_id)
                 
                 return {
                     "url": url,
@@ -205,7 +206,7 @@ async def scrape_urls(
                 "content": ""
             }
         except Exception as e:
-            logger.error(f"Error scraping URL", url=url, error=str(e), user_id=current_user.id)
+            logger.error(f"Error scraping URL", url=url, error=str(e), user_id=auth.user_id)
             return {
                 "url": url,
                 "success": False,
@@ -240,7 +241,7 @@ async def scrape_urls(
                    total_urls=len(urls),
                    successful=successful_scrapes,
                    total_content_length=total_content_length,
-                   user_id=current_user.id)
+                   user_id=auth.user_id)
         
         return {
             "results": final_results,
@@ -252,7 +253,7 @@ async def scrape_urls(
         }
         
     except Exception as e:
-        logger.error(f"Error in bulk scraping", error=str(e), user_id=current_user.id)
+        logger.error(f"Error in bulk scraping", error=str(e), user_id=auth.user_id)
         raise HTTPException(status_code=500, detail="Error during web scraping")
 
 @router.get("/health")

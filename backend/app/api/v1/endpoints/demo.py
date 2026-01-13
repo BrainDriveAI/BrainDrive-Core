@@ -9,7 +9,8 @@ from fastapi import APIRouter, Depends, HTTPException
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 from pydantic import BaseModel, Field
-from app.core.security import get_current_user
+from app.core.auth_deps import require_user
+from app.core.auth_context import AuthContext
 from app.models.user import User
 
 router = APIRouter()
@@ -38,7 +39,7 @@ class DemoItemResponse(BaseModel):
     updated_at: str
 
 @router.get("/demo/items", response_model=Dict[str, Any])
-async def get_demo_items(current_user: User = Depends(get_current_user)):
+async def get_demo_items(auth: AuthContext = Depends(require_user)):
     """
     Get all demo items for the current user.
     
@@ -46,7 +47,7 @@ async def get_demo_items(current_user: User = Depends(get_current_user)):
         Dict containing data array and count of items
     """
     try:
-        user_items = {k: v for k, v in demo_items.items() if v.get("user_id") == current_user.id}
+        user_items = {k: v for k, v in demo_items.items() if v.get("user_id") == auth.user_id}
         items_list = list(user_items.values())
         
         return {
@@ -60,7 +61,7 @@ async def get_demo_items(current_user: User = Depends(get_current_user)):
 @router.post("/demo/items", response_model=Dict[str, Any])
 async def create_demo_item(
     item_data: CreateItemRequest, 
-    current_user: User = Depends(get_current_user)
+    auth: AuthContext = Depends(require_user)
 ):
     """
     Create a new demo item.
@@ -81,7 +82,7 @@ async def create_demo_item(
             "id": str(item_counter),
             "name": item_data.name.strip(),
             "description": item_data.description.strip(),
-            "user_id": current_user.id,
+            "user_id": auth.user_id,
             "created_at": datetime.utcnow().isoformat(),
             "updated_at": datetime.utcnow().isoformat()
         }
@@ -100,7 +101,7 @@ async def create_demo_item(
 async def update_demo_item(
     item_id: str,
     item_data: UpdateItemRequest,
-    current_user: User = Depends(get_current_user)
+    auth: AuthContext = Depends(require_user)
 ):
     """
     Update an existing demo item.
@@ -118,7 +119,7 @@ async def update_demo_item(
             raise HTTPException(status_code=404, detail="Item not found")
         
         item = demo_items[item_id]
-        if item.get("user_id") != current_user.id:
+        if item.get("user_id") != auth.user_id:
             raise HTTPException(status_code=403, detail="Not authorized to update this item")
         
         # Update only provided fields
@@ -145,7 +146,7 @@ async def update_demo_item(
 @router.delete("/demo/items/{item_id}", response_model=Dict[str, Any])
 async def delete_demo_item(
     item_id: str,
-    current_user: User = Depends(get_current_user)
+    auth: AuthContext = Depends(require_user)
 ):
     """
     Delete a demo item.
@@ -162,7 +163,7 @@ async def delete_demo_item(
             raise HTTPException(status_code=404, detail="Item not found")
         
         item = demo_items[item_id]
-        if item.get("user_id") != current_user.id:
+        if item.get("user_id") != auth.user_id:
             raise HTTPException(status_code=403, detail="Not authorized to delete this item")
         
         del demo_items[item_id]
@@ -178,7 +179,7 @@ async def delete_demo_item(
         raise HTTPException(status_code=500, detail=f"Failed to delete item: {str(e)}")
 
 @router.get("/demo/status", response_model=Dict[str, Any])
-async def get_demo_status(current_user: User = Depends(get_current_user)):
+async def get_demo_status(auth: AuthContext = Depends(require_user)):
     """
     Get demo API status and statistics.
     
@@ -189,14 +190,14 @@ async def get_demo_status(current_user: User = Depends(get_current_user)):
         Dict containing status information and statistics
     """
     try:
-        user_items = {k: v for k, v in demo_items.items() if v.get("user_id") == current_user.id}
+        user_items = {k: v for k, v in demo_items.items() if v.get("user_id") == auth.user_id}
         
         return {
             "status": "active",
             "user_item_count": len(user_items),
             "total_items": len(demo_items),
             "server_time": datetime.utcnow().isoformat(),
-            "user_id": current_user.id,
+            "user_id": auth.user_id,
             "message": "Demo API is running successfully"
         }
         

@@ -5,7 +5,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
 from app.core.database import get_db
-from app.core.security import get_current_user, get_current_active_superuser
+from app.core.auth_deps import require_user, require_admin
+from app.core.auth_context import AuthContext
 from app.models.component import Component
 from app.models.user import User
 from app.schemas.component import (
@@ -19,7 +20,7 @@ router = APIRouter()
 @router.get("", response_model=List[ComponentResponse])
 async def get_components(
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    auth: AuthContext = Depends(require_user)
 ):
     """
     Get all components.
@@ -37,7 +38,7 @@ async def get_components(
 async def create_component(
     component_data: ComponentCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_active_superuser)  # Only superusers can create components
+    auth: AuthContext = Depends(require_admin)  # Only admins can create components
 ):
     """
     Create a new component.
@@ -71,7 +72,7 @@ async def create_component(
 async def get_component(
     component_id: str,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    auth: AuthContext = Depends(require_user)
 ):
     """
     Get a specific component by ID.
@@ -98,7 +99,7 @@ async def update_component(
     component_id: str,
     component_data: ComponentUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_active_superuser)  # Only superusers can update components
+    auth: AuthContext = Depends(require_admin)  # Only admins can update components
 ):
     """
     Update a component.
@@ -134,7 +135,7 @@ async def update_component(
 async def delete_component(
     component_id: str,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_active_superuser)  # Only superusers can delete components
+    auth: AuthContext = Depends(require_admin)  # Only admins can delete components
 ):
     """
     Delete a component.

@@ -12,8 +12,10 @@ from app.core.security import (
     verify_password,
     hash_password,
     create_access_token,
-    get_current_user,
 )
+from app.core.auth_deps import require_user
+from app.core.auth_context import AuthContext
+from app.core.rate_limit_deps import rate_limit_ip, rate_limit_user
 from app.models.user import User
 from app.schemas.user import UserCreate, UserLogin, UserResponse
 import logging
@@ -24,6 +26,31 @@ from jose import jwt, JWTError
 
 router = APIRouter(prefix="/auth")
 logger = logging.getLogger(__name__)
+
+
+def _log_auth_event_background(request: Request, event_type: str, success: bool, user_id: str = None, reason: str = None):
+    """Schedule audit log write in background."""
+    import asyncio
+    async def _write():
+        try:
+            from app.core.audit import audit_logger, AuditEventType
+            if success:
+                await audit_logger.log_auth_success(
+                    request=request,
+                    user_id=user_id,
+                    event_type=AuditEventType(event_type),
+                )
+            else:
+                await audit_logger.log_auth_failure(
+                    request=request,
+                    reason=reason or "Unknown error",
+                    event_type=AuditEventType(event_type),
+                    user_id=user_id,
+                )
+        except Exception as e:
+            logger.warning(f"Failed to write auth audit log: {e}")
+    
+    asyncio.create_task(_write())
 
 
 # Enhanced logging for token debugging
@@ -193,12 +220,18 @@ def log_token_validation(token: str, user_id: str, source: str, result: str):
 
 
 @router.post("/register", response_model=UserResponse)
-async def register(user_data: UserCreate, db: AsyncSession = Depends(get_db)):
+async def register(
+    request: Request,
+    user_data: UserCreate,
+    db: AsyncSession = Depends(get_db),
+    _: None = Depends(rate_limit_ip(limit=3, window_seconds=3600))
+):
     """Register a new user and initialize their data."""
     try:
         # Check if user already exists
         existing_user = await User.get_by_email(db, user_data.email)
         if existing_user:
+            _log_auth_event_background(request, "auth.register_failed", success=False, reason="Email already registered")
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Email already registered",
@@ -243,6 +276,9 @@ async def register(user_data: UserCreate, db: AsyncSession = Depends(get_db)):
             logger.error(f"Error during user initialization: {init_error}")
             # Continue with registration even if initialization fails
 
+        # Log successful registration
+        _log_auth_event_background(request, "auth.register_success", success=True, user_id=str(user.id))
+        
         return UserResponse(
             id=str(user.id),
             email=user.email,
@@ -250,8 +286,11 @@ async def register(user_data: UserCreate, db: AsyncSession = Depends(get_db)):
             version=user.version,
         )
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Registration error: {e}")
+        _log_auth_event_background(request, "auth.register_failed", success=False, reason=str(e))
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Could not register user",
@@ -260,13 +299,18 @@ async def register(user_data: UserCreate, db: AsyncSession = Depends(get_db)):
 
 @router.post("/login")
 async def login(
-    user_data: UserLogin, response: Response, db: AsyncSession = Depends(get_db)
+    request: Request,
+    user_data: UserLogin,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+    _: None = Depends(rate_limit_ip(limit=5, window_seconds=300))
 ):
     """Login user and return access token."""
     try:
         # Authenticate user
         user = await User.get_by_email(db, user_data.email)
         if not user or not verify_password(user_data.password, user.password):
+            _log_auth_event_background(request, "auth.login_failed", success=False, reason="Invalid email or password")
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid email or password",
@@ -391,12 +435,17 @@ async def login(
             "has_refresh_token": bool(response_data["refresh_token"]),
         }
         logger.info(f"Returning tokens to client: {safe_response}")
+        
+        # Log successful login
+        _log_auth_event_background(request, "auth.login_success", success=True, user_id=str(user.id))
+        
         return response_data
 
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Unexpected error during login: {e}")
+        _log_auth_event_background(request, "auth.login_failed", success=False, reason=str(e))
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Login failed"
         )
@@ -404,7 +453,10 @@ async def login(
 
 @router.post("/refresh")
 async def refresh_token(
-    response: Response, request: Request, db: AsyncSession = Depends(get_db)
+    response: Response,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    _: None = Depends(rate_limit_ip(limit=10, window_seconds=300))
 ):
     """Refresh access token using a valid refresh token from HTTP-only cookie."""
     # EMERGENCY FIX: Wrap the entire function in a try-except block to ensure it always returns a response
@@ -902,11 +954,18 @@ async def refresh_token(
 @router.post("/logout")
 async def logout(
     response: Response,
-    current_user_data: User = Depends(get_current_user),
+    auth: AuthContext = Depends(require_user),
     db: AsyncSession = Depends(get_db),
 ):
     """Logout user and clear refresh token."""
     try:
+        # Fetch user from database
+        stmt = select(User).where(User.id == auth.user_id)
+        result = await db.execute(stmt)
+        current_user_data = result.scalar_one_or_none()
+        if not current_user_data:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+        
         # Clear refresh token in database
         current_user_data.refresh_token = None
         current_user_data.refresh_token_expires = None
@@ -935,14 +994,18 @@ async def logout(
 
 @router.get("/me", response_model=UserResponse)
 async def get_current_user_info(
-    current_user_data: User = Depends(get_current_user),
+    auth: AuthContext = Depends(require_user),
     db: AsyncSession = Depends(get_db),
 ):
     """Get current user information."""
     try:
         logger.info("Getting current user info")
 
-        # The current_user is already a User object from the dependency
+        # Fetch user from database using auth context
+        stmt = select(User).where(User.id == auth.user_id)
+        result = await db.execute(stmt)
+        current_user_data = result.scalar_one_or_none()
+        
         if not current_user_data:
             logger.error("No user found")
             raise HTTPException(
@@ -974,7 +1037,7 @@ async def get_current_user_info(
 @router.put("/profile/username", response_model=UserResponse)
 async def update_username(
     request: Request,
-    current_user_data: User = Depends(get_current_user),
+    auth: AuthContext = Depends(require_user),
     db: AsyncSession = Depends(get_db),
 ):
     # Parse request body to get username
@@ -992,6 +1055,13 @@ async def update_username(
         )
     """Update the current user's username."""
     try:
+        # Fetch user from database using auth context
+        stmt = select(User).where(User.id == auth.user_id)
+        result = await db.execute(stmt)
+        current_user_data = result.scalar_one_or_none()
+        if not current_user_data:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+        
         logger.info(f"Updating username for user: {current_user_data.id}")
 
         # Check if username is already taken
@@ -1036,7 +1106,7 @@ async def update_username(
 @router.put("/profile/password")
 async def update_password(
     request: Request,
-    current_user_data: User = Depends(get_current_user),
+    auth: AuthContext = Depends(require_user),
     db: AsyncSession = Depends(get_db),
 ):
     # Parse request body to get password data
@@ -1069,6 +1139,13 @@ async def update_password(
         )
     """Update the current user's password."""
     try:
+        # Fetch user from database using auth context
+        stmt = select(User).where(User.id == auth.user_id)
+        result = await db.execute(stmt)
+        current_user_data = result.scalar_one_or_none()
+        if not current_user_data:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+        
         logger.info(f"Updating password for user: {current_user_data.id}")
 
         # Verify current password

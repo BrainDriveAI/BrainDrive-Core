@@ -5,6 +5,7 @@ Handles CRUD operations, validation, and business logic for personas.
 import json
 import logging
 from typing import List, Optional, Dict, Any
+from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from sqlalchemy.orm import selectinload
@@ -12,6 +13,7 @@ from sqlalchemy.orm import selectinload
 from app.models.persona import Persona
 from app.schemas.persona import PersonaCreate, PersonaUpdate, ModelSettings
 from app.core.database import get_db
+from app.core.auth_context import AuthContext
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +75,37 @@ class PersonaService:
         except Exception as e:
             logger.error(f"Error getting persona {persona_id}: {e}")
             return None
+    
+    @staticmethod
+    async def get_user_persona(
+        db: AsyncSession,
+        persona_id: str,
+        auth: AuthContext
+    ) -> Persona:
+        """
+        Get a persona and ensure it belongs to the current user.
+        
+        Returns 404 (not 403) if persona doesn't exist or doesn't belong to user,
+        to prevent resource enumeration attacks.
+        
+        Args:
+            db: Database session
+            persona_id: ID of the persona to retrieve
+            auth: Authentication context with current user info
+            
+        Returns:
+            Persona object if found and belongs to user
+            
+        Raises:
+            HTTPException: 404 if persona not found or doesn't belong to user
+        """
+        persona = await PersonaService.get_persona_by_id(db, persona_id, str(auth.user_id))
+        if not persona:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Persona not found"
+            )
+        return persona
     
     @staticmethod
     async def get_user_personas(

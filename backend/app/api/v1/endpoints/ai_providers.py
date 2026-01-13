@@ -13,7 +13,9 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
 from app.core.database import get_db
-from app.core.security import get_current_user
+from app.core.auth_deps import require_user, optional_user
+from app.core.auth_context import AuthContext
+from app.core.rate_limit_deps import rate_limit_user
 from app.models.settings import SettingDefinition, SettingScope, SettingInstance
 from app.models.user import User
 from app.ai_providers.registry import provider_registry
@@ -425,7 +427,7 @@ async def get_providers():
 async def get_provider_catalog(
     user_id: Optional[str] = Query("current", description="User ID"),
     db: AsyncSession = Depends(get_db),
-    current_user: Optional[User] = Depends(get_current_user)
+    auth: Optional[AuthContext] = Depends(optional_user)
 ):
     """
     Return provider metadata for UI selection (provider -> settings_id, server strategy, etc)
@@ -433,9 +435,9 @@ async def get_provider_catalog(
     """
     # Resolve user_id from authentication if "current" is specified
     if user_id == "current":
-        if not current_user:
+        if not auth:
             raise HTTPException(status_code=401, detail="Authentication required")
-        user_id = str(current_user.id)
+        user_id = str(auth.user_id)
 
     # Normalize user_id by removing hyphens if present
     user_id = user_id.replace("-", "")
@@ -606,15 +608,16 @@ async def get_models(
     server_id: str = Query(..., description="Server ID"),
     user_id: Optional[str] = Query("current", description="User ID"),
     db: AsyncSession = Depends(get_db),
-    current_user: Optional[User] = Depends(get_current_user)
+    auth: Optional[AuthContext] = Depends(optional_user),
+    _: None = Depends(rate_limit_user(limit=100, window_seconds=60))
 ):
     """Get available models from a provider."""
     try:
         # Resolve user_id from authentication if "current" is specified
         if user_id == "current":
-            if not current_user:
+            if not auth:
                 raise HTTPException(status_code=401, detail="Authentication required")
-            user_id = str(current_user.id)
+            user_id = str(auth.user_id)
         
         # Normalize user_id by removing hyphens if present
         user_id = user_id.replace("-", "")
@@ -782,15 +785,16 @@ async def get_models(
 async def get_all_models(
     user_id: Optional[str] = Query("current", description="User ID"),
     db: AsyncSession = Depends(get_db),
-    current_user: Optional[User] = Depends(get_current_user)
+    auth: Optional[AuthContext] = Depends(optional_user),
+    _: None = Depends(rate_limit_user(limit=100, window_seconds=60))
 ):
     """Get models from ALL connected providers for a user."""
     try:
         # Resolve user_id from authentication if "current" is specified
         if user_id == "current":
-            if not current_user:
+            if not auth:
                 raise HTTPException(status_code=401, detail="Authentication required")
-            user_id = str(current_user.id)
+            user_id = str(auth.user_id)
         
         # Normalize user_id by removing hyphens if present
         user_id = user_id.replace("-", "")

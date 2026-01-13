@@ -7,7 +7,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
 
 from app.core.job_manager_provider import get_job_manager
-from app.core.security import get_current_user
+from app.core.auth_deps import require_user
+from app.core.auth_context import AuthContext
 from app.models.job import Job, JobStatus
 from app.schemas.job import (
     JobCreateRequest,
@@ -26,8 +27,8 @@ TERMINAL_JOB_STATUSES = {
 }
 
 
-def _ensure_job_access(job: Job, user: User) -> None:
-    if job.user_id != str(user.id):
+def _ensure_job_access(job: Job, auth: AuthContext) -> None:
+    if job.user_id != str(auth.user_id):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
 
 
@@ -90,13 +91,13 @@ def _serialize_job_event_payload(job: Job, event) -> dict:
 @router.post("", response_model=JobResponse, status_code=status.HTTP_202_ACCEPTED)
 async def create_job(
     request: JobCreateRequest,
-    current_user: User = Depends(get_current_user),
+    auth: AuthContext = Depends(require_user),
     job_manager: JobManager = Depends(get_job_manager),
 ) -> JobResponse:
     job, _ = await job_manager.enqueue_job(
         job_type=request.job_type,
         payload=request.payload,
-        user_id=str(current_user.id),
+        user_id=str(auth.user_id),
         priority=request.priority,
         scheduled_for=request.scheduled_for,
         idempotency_key=request.idempotency_key,
@@ -112,11 +113,11 @@ async def list_jobs(
     job_type: Optional[str] = Query(default=None),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
-    current_user: User = Depends(get_current_user),
+    auth: AuthContext = Depends(require_user),
     job_manager: JobManager = Depends(get_job_manager),
 ) -> JobListResponse:
     result = await job_manager.list_jobs(
-        user_id=str(current_user.id),
+        user_id=str(auth.user_id),
         status=status_filter.value if status_filter else None,
         job_type=job_type,
         page=page,
@@ -135,26 +136,26 @@ async def list_jobs(
 @router.get("/{job_id}", response_model=JobResponse)
 async def get_job(
     job_id: str,
-    current_user: User = Depends(get_current_user),
+    auth: AuthContext = Depends(require_user),
     job_manager: JobManager = Depends(get_job_manager),
 ) -> JobResponse:
     job = await job_manager.get_job(job_id)
     if not job:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
-    _ensure_job_access(job, current_user)
+    _ensure_job_access(job, auth)
     return _to_job_response(job)
 
 
 @router.post("/{job_id}/cancel", status_code=status.HTTP_202_ACCEPTED)
 async def cancel_job(
     job_id: str,
-    current_user: User = Depends(get_current_user),
+    auth: AuthContext = Depends(require_user),
     job_manager: JobManager = Depends(get_job_manager),
 ) -> dict:
     job = await job_manager.get_job(job_id)
     if not job:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
-    _ensure_job_access(job, current_user)
+    _ensure_job_access(job, auth)
 
     canceled = await job_manager.cancel_job(job_id)
     if not canceled:
@@ -165,13 +166,13 @@ async def cancel_job(
 @router.post("/{job_id}/retry", response_model=JobResponse)
 async def retry_job(
     job_id: str,
-    current_user: User = Depends(get_current_user),
+    auth: AuthContext = Depends(require_user),
     job_manager: JobManager = Depends(get_job_manager),
 ) -> JobResponse:
     job = await job_manager.get_job(job_id)
     if not job:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
-    _ensure_job_access(job, current_user)
+    _ensure_job_access(job, auth)
 
     retried = await job_manager.retry_job(job_id)
     if not retried:
@@ -182,14 +183,14 @@ async def retry_job(
 @router.delete("/{job_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_job(
     job_id: str,
-    current_user: User = Depends(get_current_user),
+    auth: AuthContext = Depends(require_user),
     job_manager: JobManager = Depends(get_job_manager),
 ) -> None:
     job = await job_manager.get_job(job_id)
     if not job:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
-    _ensure_job_access(job, current_user)
-    deleted = await job_manager.delete_job(job_id, str(current_user.id))
+    _ensure_job_access(job, auth)
+    deleted = await job_manager.delete_job(job_id, str(auth.user_id))
     if not deleted:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unable to delete job")
     return None
@@ -199,13 +200,13 @@ async def delete_job(
 async def get_job_events(
     job_id: str,
     since_sequence: Optional[int] = Query(default=None, ge=0),
-    current_user: User = Depends(get_current_user),
+    auth: AuthContext = Depends(require_user),
     job_manager: JobManager = Depends(get_job_manager),
 ) -> List[JobProgressEventResponse]:
     job = await job_manager.get_job(job_id)
     if not job:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
-    _ensure_job_access(job, current_user)
+    _ensure_job_access(job, auth)
 
     events = await job_manager.get_progress_events(job_id, since=since_sequence)
     return [JobProgressEventResponse.model_validate(event) for event in events]
@@ -214,13 +215,13 @@ async def get_job_events(
 @router.get("/{job_id}/events/stream")
 async def stream_job_events(
     job_id: str,
-    current_user: User = Depends(get_current_user),
+    auth: AuthContext = Depends(require_user),
     job_manager: JobManager = Depends(get_job_manager),
 ):
     job = await job_manager.get_job(job_id)
     if not job:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
-    _ensure_job_access(job, current_user)
+    _ensure_job_access(job, auth)
 
     async def event_generator():
         last_sequence: Optional[int] = None
@@ -231,7 +232,7 @@ async def stream_job_events(
                 events = await job_manager.get_progress_events(job_id, since=last_sequence)
                 if events:
                     job_snapshot = await job_manager.get_job(job_id)
-                    if not job_snapshot or job_snapshot.user_id != str(current_user.id):
+                    if not job_snapshot or job_snapshot.user_id != str(auth.user_id):
                         break
                     for event in events:
                         last_sequence = event.sequence_number
@@ -239,7 +240,7 @@ async def stream_job_events(
                         yield f"data: {json.dumps(payload)}\n\n".encode()
 
                 job_snapshot = await job_manager.get_job(job_id)
-                if not job_snapshot or job_snapshot.user_id != str(current_user.id):
+                if not job_snapshot or job_snapshot.user_id != str(auth.user_id):
                     break
                 if job_snapshot.status in TERMINAL_JOB_STATUSES:
                     yield f"data: {json.dumps(_serialize_job_snapshot(job_snapshot, event_type='terminal'))}\n\n".encode()
@@ -254,13 +255,13 @@ async def stream_job_events(
 @router.get("/{job_id}/logs", response_model=List[JobProgressEventResponse])
 async def get_job_logs(
     job_id: str,
-    current_user: User = Depends(get_current_user),
+    auth: AuthContext = Depends(require_user),
     job_manager: JobManager = Depends(get_job_manager),
 ) -> List[JobProgressEventResponse]:
     job = await job_manager.get_job(job_id)
     if not job:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
-    _ensure_job_access(job, current_user)
+    _ensure_job_access(job, auth)
 
     events = await job_manager.get_progress_events(job_id)
     log_events = [event for event in events if event.event_type in {"log", "error"}]
