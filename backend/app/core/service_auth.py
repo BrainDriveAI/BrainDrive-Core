@@ -109,69 +109,80 @@ async def get_service_context(request: Request) -> ServiceContext:
     Raises:
         HTTPException: 401 if token invalid, 403 if service not recognized
     """
-    # Extract token
-    token = _extract_service_token(request)
-    
-    if not token:
-        logger.warning(
-            "Service auth failed - no token",
-            extra={"path": request.url.path, "method": request.method}
+    try:
+        # Extract token
+        token = _extract_service_token(request)
+
+        if not token:
+            logger.warning(
+                "Service auth failed - no token",
+                extra={"path": request.url.path, "method": request.method}
+            )
+            _log_service_auth_background(request, "No service token provided", success=False)
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Service authentication required. Provide Bearer token.",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+
+        # Validate token and get service name
+        service_name = _validate_service_token(token)
+
+        if not service_name:
+            logger.warning(
+                "Service auth failed - invalid token",
+                extra={"path": request.url.path, "method": request.method}
+            )
+            _log_service_auth_background(request, "Invalid service token", success=False)
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid service token",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+
+        # Get service definition
+        service_def = SERVICE_DEFINITIONS.get(service_name)
+
+        if not service_def:
+            logger.error(
+                "Service auth failed - unknown service",
+                extra={"service_name": service_name, "path": request.url.path}
+            )
+            _log_service_auth_background(request, f"Unknown service: {service_name}", success=False, service_name=service_name)
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Service '{service_name}' not recognized"
+            )
+
+        # Create service context
+        context = ServiceContext(
+            service_name=service_name,
+            scopes=service_def["scopes"]
         )
-        _log_service_auth_background(request, "No service token provided", success=False)
+
+        # Log successful authentication
+        _log_service_auth_background(request, "Service authenticated", success=True, service_name=service_name)
+
+        logger.info(
+            "Service authenticated",
+            extra={
+                "service_name": service_name,
+                "scopes": list(context.scopes),
+                "path": request.url.path,
+            }
+        )
+
+        return context
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Service auth error", exc_info=True)
+        _log_service_auth_background(request, "Service auth error", success=False)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Service authentication required. Provide Bearer token.",
+            detail="Service authentication failed",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    
-    # Validate token and get service name
-    service_name = _validate_service_token(token)
-    
-    if not service_name:
-        logger.warning(
-            "Service auth failed - invalid token",
-            extra={"path": request.url.path, "method": request.method}
-        )
-        _log_service_auth_background(request, "Invalid service token", success=False)
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid service token",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-    
-    # Get service definition
-    service_def = SERVICE_DEFINITIONS.get(service_name)
-    
-    if not service_def:
-        logger.error(
-            "Service auth failed - unknown service",
-            extra={"service_name": service_name, "path": request.url.path}
-        )
-        _log_service_auth_background(request, f"Unknown service: {service_name}", success=False, service_name=service_name)
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=f"Service '{service_name}' not recognized"
-        )
-    
-    # Create service context
-    context = ServiceContext(
-        service_name=service_name,
-        scopes=service_def["scopes"]
-    )
-    
-    # Log successful authentication
-    _log_service_auth_background(request, "Service authenticated", success=True, service_name=service_name)
-    
-    logger.info(
-        "Service authenticated",
-        extra={
-            "service_name": service_name,
-            "scopes": list(context.scopes),
-            "path": request.url.path,
-        }
-    )
-    
-    return context
 
 
 async def require_service(
