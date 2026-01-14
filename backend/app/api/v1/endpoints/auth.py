@@ -28,6 +28,18 @@ router = APIRouter(prefix="/auth")
 logger = logging.getLogger(__name__)
 
 
+def _token_debug_enabled() -> bool:
+    return settings.APP_ENV.lower() in {"dev", "development", "test", "local"}
+
+
+def _token_preview(token: Optional[str], keep: int = 6) -> str:
+    if not token:
+        return "None"
+    if len(token) <= keep * 2:
+        return "***"
+    return f"{token[:keep]}...{token[-keep:]}"
+
+
 def _log_auth_event_background(request: Request, event_type: str, success: bool, user_id: str = None, reason: str = None):
     """Schedule audit log write in background."""
     import asyncio
@@ -57,6 +69,8 @@ def _log_auth_event_background(request: Request, event_type: str, success: bool,
 def log_token_info(token, token_type="access", mask=True):
     """Log token information for debugging purposes."""
     try:
+        if not _token_debug_enabled():
+            return
         # Decode without verification to extract payload for logging
         parts = token.split(".")
         if len(parts) != 3:
@@ -89,10 +103,10 @@ def log_token_info(token, token_type="access", mask=True):
             )
 
         # Mask the token for security
-        if mask and token:
-            token_preview = f"{token[:10]}...{token[-5:]}" if len(token) > 15 else "***"
+        if mask:
+            token_preview = _token_preview(token, keep=10)
         else:
-            token_preview = token
+            token_preview = "***"
 
         logger.info(
             f"{token_type.capitalize()} token info: "
@@ -106,15 +120,17 @@ def log_token_info(token, token_type="access", mask=True):
 def get_cookie_options(path: str = "/") -> dict:
     """Get cookie options based on environment."""
     # Determine if we're in development or production
-    is_dev = settings.APP_ENV.lower() == "dev"
+    is_dev = settings.APP_ENV.lower() in {"dev", "development", "test", "local"}
+    secure = settings.COOKIE_SECURE if settings.COOKIE_SECURE is not None else not is_dev
+    samesite = (settings.COOKIE_SAMESITE or "lax").lower()
+    if samesite == "none":
+        secure = True
 
     return {
         "key": "refresh_token",
         "httponly": True,  # Prevent JavaScript access
-        "secure": not is_dev,  # Only set secure=True in production (HTTPS)
-        "samesite": (
-            "lax" if is_dev else "none"
-        ),  # Use 'lax' for dev, 'none' for production
+        "secure": secure,
+        "samesite": samesite,
         "max_age": settings.REFRESH_TOKEN_EXPIRE_DAYS
         * 24
         * 60
@@ -190,6 +206,8 @@ def clear_refresh_token_systematically(response: Response, request: Request):
 def log_token_validation(token: str, user_id: str, source: str, result: str):
     """Enhanced logging for token validation"""
     try:
+        if not _token_debug_enabled():
+            return
         # Import json and base64 here to ensure they're available in this scope
         import json
         import base64
@@ -362,8 +380,14 @@ async def login(
 
         # Log detailed information about the token being stored
         logger.info(f"Storing refresh token in database for user {user.email}")
-        logger.info(f"Token (first 10 chars): {refresh_token[:10]}")
-        logger.info(f"Token length: {len(refresh_token)}")
+        if _token_debug_enabled():
+            logger.debug(
+                "Refresh token stored",
+                extra={
+                    "token_preview": _token_preview(refresh_token),
+                    "token_length": len(refresh_token),
+                },
+            )
         logger.info(f"Token expires: {user.refresh_token_expires}")
 
         # Save the user with the new refresh token
@@ -375,12 +399,10 @@ async def login(
             logger.info(f"Refresh token successfully stored in database")
         else:
             logger.error(f"Failed to store refresh token in database")
-            if updated_user:
-                logger.error(
-                    f"Stored token (first 10 chars): {updated_user.refresh_token[:10] if updated_user.refresh_token else 'None'}"
-                )
-                logger.error(
-                    f"Stored token length: {len(updated_user.refresh_token) if updated_user.refresh_token else 0}"
+            if updated_user and _token_debug_enabled():
+                logger.debug(
+                    "Stored refresh token mismatch",
+                    extra={"token_length": len(updated_user.refresh_token) if updated_user.refresh_token else 0},
                 )
 
         # Set refresh token cookie
@@ -461,21 +483,22 @@ async def refresh_token(
     """Refresh access token using a valid refresh token from HTTP-only cookie."""
     # EMERGENCY FIX: Wrap the entire function in a try-except block to ensure it always returns a response
     try:
-        # Log all cookies for debugging
-        logger.info(f"Cookies in request: {request.cookies}")
+        if _token_debug_enabled():
+            logger.debug("Cookies received", extra={"cookie_keys": list(request.cookies.keys())})
         
         # Get refresh token from cookie
         refresh_token = request.cookies.get("refresh_token")
         
-        # DETAILED TOKEN LOGGING
-        if refresh_token:
-            logger.info(f"🔍 REFRESH TOKEN RECEIVED:")
-            logger.info(f"   Token (first 50 chars): {refresh_token[:50]}...")
-            logger.info(f"   Token (last 50 chars): ...{refresh_token[-50:]}")
-            logger.info(f"   Token length: {len(refresh_token)}")
-            logger.info(f"   Full token: {refresh_token}")
-        else:
-            logger.info("❌ NO REFRESH TOKEN IN REQUEST")
+        if refresh_token and _token_debug_enabled():
+            logger.debug(
+                "Refresh token received",
+                extra={
+                    "token_preview": _token_preview(refresh_token, keep=8),
+                    "token_length": len(refresh_token),
+                },
+            )
+        elif not refresh_token:
+            logger.info("No refresh token in request")
         
         # NUCLEAR OPTION: Block the specific problematic token immediately
         BLOCKED_TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJiOTExODgwMTMyNWQ0MDdmYWIzM2E2Zjc5YmQyNGRhZCIsInJlZnJlc2giOnRydWUsImlhdCI6MTc1NTQ2NjQxMC41MzM1MDEsImV4cCI6MTc1ODA0NDAxMH0.0lVRx8qHILYv3IaaaMWNLDdKx_5ANTp4vMiAGuC_Hzg"
@@ -744,14 +767,7 @@ async def refresh_token(
                 )
 
             # Verify that the refresh token matches what's in the database
-            # Log detailed token information for debugging
-            logger.info(f"Comparing tokens:")
-            logger.info(
-                f"DB token (first 10 chars): {user.refresh_token[:10] if user.refresh_token else 'None'}"
-            )
-            logger.info(
-                f"Request token (first 10 chars): {refresh_token[:10] if refresh_token else 'None'}"
-            )
+            logger.info("Comparing refresh token against stored value")
 
             # Check if the user has a refresh token in the database
             if not user.refresh_token:
@@ -767,9 +783,6 @@ async def refresh_token(
                 logger.info(f"Updated user record with token from request")
             elif user.refresh_token != refresh_token:
                 logger.warning(f"Token mismatch between database and request")
-                logger.warning(
-                    f"DB token length: {len(user.refresh_token)}, Request token length: {len(refresh_token)}"
-                )
 
                 # For now, update the database with the token from the request
                 # This is a temporary fix to help diagnose the issue
@@ -867,8 +880,14 @@ async def refresh_token(
             logger.info(
                 f"New refresh token generated and about to be stored in database"
             )
-            logger.info(f"New token (first 10 chars): {new_refresh_token[:10]}")
-            logger.info(f"New token length: {len(new_refresh_token)}")
+            if _token_debug_enabled():
+                logger.debug(
+                    "New refresh token metadata",
+                    extra={
+                        "token_preview": _token_preview(new_refresh_token),
+                        "token_length": len(new_refresh_token),
+                    },
+                )
 
             # Save the user with the new refresh token
             await user.save(db)
@@ -879,7 +898,6 @@ async def refresh_token(
             logger.info(
                 "Continuing despite database error (tokens will still be returned to client)"
             )
-        logger.info(f"New token length: {len(new_refresh_token)}")
         logger.info(f"Token expires at: {expiry_time.isoformat()}")
         logger.info(f"Token lifetime: {settings.REFRESH_TOKEN_EXPIRE_DAYS} days")
 
@@ -892,12 +910,10 @@ async def refresh_token(
             logger.info(f"New refresh token successfully stored in database")
         else:
             logger.error(f"Failed to store new refresh token in database")
-            if updated_user:
-                logger.error(
-                    f"Stored token (first 10 chars): {updated_user.refresh_token[:10] if updated_user.refresh_token else 'None'}"
-                )
-                logger.error(
-                    f"Stored token length: {len(updated_user.refresh_token) if updated_user.refresh_token else 0}"
+            if updated_user and _token_debug_enabled():
+                logger.debug(
+                    "Stored refresh token mismatch after rotation",
+                    extra={"token_length": len(updated_user.refresh_token) if updated_user.refresh_token else 0},
                 )
 
         # Set new refresh token cookie - use root path to ensure cookie is sent with all requests
