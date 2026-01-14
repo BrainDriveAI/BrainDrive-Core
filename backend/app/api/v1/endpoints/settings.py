@@ -120,11 +120,24 @@ def _normalize_scope(scope_value):
     if isinstance(scope_value, SettingScope):
         return scope_value
     if isinstance(scope_value, str):
+        scope_value = scope_value.strip()
+        if not scope_value:
+            return None
         try:
             return SettingScope(scope_value)
         except ValueError:
             return None
     return None
+
+
+def _enforce_instance_ownership(instance: dict, auth: Optional[AuthContext]) -> None:
+    if instance.get("user_id"):
+        if not auth:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Authentication required for user settings"
+            )
+        ensure_setting_instance_belongs_to_user(instance, auth)
 
 async def get_definition_by_id(db, definition_id: str):
     """Helper function to get a setting definition by ID using direct SQL."""
@@ -1268,6 +1281,8 @@ async def get_setting_instance(
             "created_at": row[7],
             "updated_at": row[8]
         }
+
+        _enforce_instance_ownership(instance, auth)
         
         # Check access permission
         scope_value = instance["scope"]
@@ -1332,13 +1347,15 @@ async def update_setting_instance(
             "id": row[0],
             "definition_id": row[1],
             "name": row[2],
-            "value": json.loads(row[3]) if row[3] else None,
+            "value": row[3],
             "scope": row[4],
             "user_id": row[5],
             "page_id": row[6],
             "created_at": row[7],
             "updated_at": row[8]
         }
+
+        _enforce_instance_ownership(instance, auth)
         
         # Check access permission
         scope_value = instance["scope"]
@@ -1461,13 +1478,15 @@ async def put_setting_instance(
             "id": row[0],
             "definition_id": row[1],
             "name": row[2],
-            "value": json.loads(row[3]) if row[3] else None,
+            "value": row[3],
             "scope": row[4],
             "user_id": row[5],
             "page_id": row[6],
             "created_at": row[7],
             "updated_at": row[8]
         }
+
+        _enforce_instance_ownership(instance, auth)
         
         # Check access permission
         scope_value = instance["scope"]
@@ -1601,13 +1620,15 @@ async def delete_setting_instance(
             "id": row[0],
             "definition_id": row[1],
             "name": row[2],
-            "value": json.loads(row[3]) if row[3] else None,
+            "value": row[3],
             "scope": row[4],
             "user_id": row[5],
             "page_id": row[6],
             "created_at": row[7],
             "updated_at": row[8]
         }
+
+        _enforce_instance_ownership(instance, auth)
         
         # Check access permission
         scope_value = instance["scope"]
