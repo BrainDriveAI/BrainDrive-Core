@@ -21,6 +21,9 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl=f"{settings.API_V1_PREFIX}/auth/lo
 # Using bcrypt with a work factor of 12 (2^12 iterations)
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto", bcrypt__rounds=12)
 
+def _token_debug_enabled() -> bool:
+    return settings.APP_ENV.lower() in {"dev", "development", "test", "local"} or settings.DEBUG
+
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     """Verify a password against its hash using Passlib."""
     try:
@@ -95,16 +98,17 @@ async def get_current_user(token: str = Depends(oauth2_scheme), db: AsyncSession
     """Get the current user from the JWT token."""
 
     try:
-        # Log the token being used (first 10 chars only for security)
-        token_preview = token[:10] + "..." if token else "None"
-        logger.info(f"Authenticating with token: {token_preview}")
+        if _token_debug_enabled():
+            token_preview = token[:10] + "..." if token else "None"
+            logger.debug(f"Authenticating with token: {token_preview}")
         
         # Decode the token
         payload = decode_access_token(token)
         
         # Log the payload (excluding sensitive data)
         user_id = payload.get("sub")
-        logger.info(f"Token payload contains user_id: {user_id}")
+        if _token_debug_enabled():
+            logger.debug(f"Token payload contains user_id: {user_id}")
         
         if user_id is None:
             logger.error("Token payload does not contain 'sub' field")

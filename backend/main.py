@@ -239,9 +239,11 @@ class LoggingMiddleware(BaseHTTPMiddleware):
         return response
 
 # ✅ 3. Allow All Hosts for Development (Fix 403 Issues)
+env = settings.APP_ENV.lower()
+allowed_hosts = ["*"] if env in {"dev", "development", "test", "local"} else settings.ALLOWED_HOSTS
 app.add_middleware(
-    TrustedHostMiddleware, 
-    allowed_hosts=["*"]  # Allow all hosts (change in production)
+    TrustedHostMiddleware,
+    allowed_hosts=allowed_hosts
 )
 
 # ✅ 3.5. Request ID for correlation and audit logging
