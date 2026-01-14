@@ -40,6 +40,15 @@ def _token_preview(token: Optional[str], keep: int = 6) -> str:
     return f"{token[:keep]}...{token[-keep:]}"
 
 
+def _require_dev_mode() -> None:
+    env = settings.APP_ENV.lower()
+    if env not in {"dev", "development", "test", "local"}:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Endpoint not available",
+        )
+
+
 def _log_auth_event_background(request: Request, event_type: str, success: bool, user_id: str = None, reason: str = None):
     """Schedule audit log write in background."""
     import asyncio
@@ -1211,6 +1220,7 @@ async def update_password(
 @router.post("/nuclear-clear-cookies")
 async def nuclear_clear_cookies(request: Request, response: Response):
     """
+    _require_dev_mode()
     Nuclear option: Clear ALL cookies with every possible domain/path combination.
     This addresses shared development environment cookie pollution issues.
     """
@@ -1354,6 +1364,7 @@ async def force_logout_clear(request: Request, response: Response):
     Force logout and aggressive cookie clearing with cache-busting headers.
     This is the nuclear option for persistent cookie issues.
     """
+    _require_dev_mode()
     
     logger.info("🚨 FORCE LOGOUT AND CLEAR INITIATED")
     
@@ -1504,6 +1515,7 @@ async def force_logout_clear(request: Request, response: Response):
 @router.post("/test-cookie-setting")
 async def test_cookie_setting(response: Response):
     """Test endpoint to verify cookie setting works"""
+    _require_dev_mode()
     
     logger.info("🧪 Testing cookie setting...")
     
