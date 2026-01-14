@@ -7,6 +7,7 @@ from app.core.config import settings
 from app.routers.plugins import plugin_manager
 from app.plugins.service_installler.start_stop_plugin_services import start_plugin_services_on_startup, stop_all_plugin_services_on_shutdown
 from app.core.job_manager_provider import initialize_job_manager, shutdown_job_manager
+from app.middleware.request_size import RequestSizeMiddleware
 import logging
 import time
 import structlog
@@ -22,6 +23,11 @@ app.add_middleware(
     allow_headers=settings.cors_headers_list,
     expose_headers=settings.cors_expose_headers_list,
     max_age=settings.CORS_MAX_AGE,
+)
+
+app.add_middleware(
+    RequestSizeMiddleware,
+    max_size=settings.MAX_REQUEST_SIZE
 )
 
 # Add startup event to initialize settings

@@ -48,6 +48,9 @@ if "PyPDF2" not in sys.modules:
 # Override settings for testing
 os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///./test.db"
 os.environ["ENVIRONMENT"] = "test"
+os.environ["PLUGIN_RUNTIME_TOKEN"] = "test-plugin-runtime-token"
+os.environ["JOB_WORKER_TOKEN"] = "test-job-worker-token"
+os.environ["PLUGIN_LIFECYCLE_TOKEN"] = "test-plugin-lifecycle-token"
 
 from app.core.config import settings
 

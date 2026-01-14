@@ -116,6 +116,16 @@ def mask_sensitive_data(definition_id: str, value: any) -> any:
     
     return value
 
+def _normalize_scope(scope_value):
+    if isinstance(scope_value, SettingScope):
+        return scope_value
+    if isinstance(scope_value, str):
+        try:
+            return SettingScope(scope_value)
+        except ValueError:
+            return None
+    return None
+
 async def get_definition_by_id(db, definition_id: str):
     """Helper function to get a setting definition by ID using direct SQL."""
     query = text("""
@@ -1261,7 +1271,8 @@ async def get_setting_instance(
         
         # Check access permission
         scope_value = instance["scope"]
-        if scope_value in [SettingScope.USER.value, SettingScope.USER_PAGE.value]:
+        scope_enum = _normalize_scope(scope_value)
+        if scope_enum in [SettingScope.USER, SettingScope.USER_PAGE]:
             if not auth:
                 raise HTTPException(
                     status_code=status.HTTP_401_UNAUTHORIZED,
@@ -1269,7 +1280,7 @@ async def get_setting_instance(
                 )
             # Verify ownership using service helper
             ensure_setting_instance_belongs_to_user(instance, auth)
-        elif scope_value == SettingScope.SYSTEM.value:
+        elif scope_enum == SettingScope.SYSTEM:
             if not auth or not auth.is_admin:
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
@@ -1331,7 +1342,8 @@ async def update_setting_instance(
         
         # Check access permission
         scope_value = instance["scope"]
-        if scope_value in [SettingScope.USER.value, SettingScope.USER_PAGE.value]:
+        scope_enum = _normalize_scope(scope_value)
+        if scope_enum in [SettingScope.USER, SettingScope.USER_PAGE]:
             if not auth:
                 raise HTTPException(
                     status_code=status.HTTP_401_UNAUTHORIZED,
@@ -1339,7 +1351,7 @@ async def update_setting_instance(
                 )
             # Verify ownership using service helper
             ensure_setting_instance_belongs_to_user(instance, auth)
-        elif scope_value == SettingScope.SYSTEM.value:
+        elif scope_enum == SettingScope.SYSTEM:
             if not auth or not auth.is_admin:
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
@@ -1459,7 +1471,8 @@ async def put_setting_instance(
         
         # Check access permission
         scope_value = instance["scope"]
-        if scope_value in [SettingScope.USER.value, SettingScope.USER_PAGE.value]:
+        scope_enum = _normalize_scope(scope_value)
+        if scope_enum in [SettingScope.USER, SettingScope.USER_PAGE]:
             if not auth:
                 raise HTTPException(
                     status_code=status.HTTP_401_UNAUTHORIZED,
@@ -1467,7 +1480,7 @@ async def put_setting_instance(
                 )
             # Verify ownership using service helper
             ensure_setting_instance_belongs_to_user(instance, auth)
-        elif scope_value == SettingScope.SYSTEM.value:
+        elif scope_enum == SettingScope.SYSTEM:
             if not auth or not auth.is_admin:
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
@@ -1598,7 +1611,8 @@ async def delete_setting_instance(
         
         # Check access permission
         scope_value = instance["scope"]
-        if scope_value in [SettingScope.USER.value, SettingScope.USER_PAGE.value]:
+        scope_enum = _normalize_scope(scope_value)
+        if scope_enum in [SettingScope.USER, SettingScope.USER_PAGE]:
             if not auth:
                 raise HTTPException(
                     status_code=status.HTTP_401_UNAUTHORIZED,
@@ -1606,7 +1620,7 @@ async def delete_setting_instance(
                 )
             # Verify ownership using service helper
             ensure_setting_instance_belongs_to_user(instance, auth)
-        elif scope_value == SettingScope.SYSTEM.value:
+        elif scope_enum == SettingScope.SYSTEM:
             if not auth or not auth.is_admin:
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,

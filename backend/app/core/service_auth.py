@@ -115,8 +115,7 @@ async def get_service_context(request: Request) -> ServiceContext:
     if not token:
         logger.warning(
             "Service auth failed - no token",
-            path=request.url.path,
-            method=request.method
+            extra={"path": request.url.path, "method": request.method}
         )
         _log_service_auth_background(request, "No service token provided", success=False)
         raise HTTPException(
@@ -131,8 +130,7 @@ async def get_service_context(request: Request) -> ServiceContext:
     if not service_name:
         logger.warning(
             "Service auth failed - invalid token",
-            path=request.url.path,
-            method=request.method
+            extra={"path": request.url.path, "method": request.method}
         )
         _log_service_auth_background(request, "Invalid service token", success=False)
         raise HTTPException(
@@ -147,8 +145,7 @@ async def get_service_context(request: Request) -> ServiceContext:
     if not service_def:
         logger.error(
             "Service auth failed - unknown service",
-            service_name=service_name,
-            path=request.url.path
+            extra={"service_name": service_name, "path": request.url.path}
         )
         _log_service_auth_background(request, f"Unknown service: {service_name}", success=False, service_name=service_name)
         raise HTTPException(
@@ -167,9 +164,11 @@ async def get_service_context(request: Request) -> ServiceContext:
     
     logger.info(
         "Service authenticated",
-        service_name=service_name,
-        scopes=list(context.scopes),
-        path=request.url.path
+        extra={
+            "service_name": service_name,
+            "scopes": list(context.scopes),
+            "path": request.url.path,
+        }
     )
     
     return context
@@ -223,9 +222,11 @@ async def require_service_scope(
     if not service_context.has_scope(required_scope):
         logger.warning(
             "Service missing required scope",
-            service_name=service_context.service_name,
-            required_scope=required_scope,
-            has_scopes=list(service_context.scopes)
+            extra={
+                "service_name": service_context.service_name,
+                "required_scope": required_scope,
+                "has_scopes": list(service_context.scopes),
+            }
         )
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -265,4 +266,3 @@ def create_scope_dependency(scope: str):
 require_plugin_execution = create_scope_dependency("execute_plugin")
 require_job_execution = create_scope_dependency("execute_job")
 require_plugin_lifecycle = create_scope_dependency("install_plugin")
-
