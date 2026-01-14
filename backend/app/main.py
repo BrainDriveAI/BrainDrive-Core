@@ -66,15 +66,15 @@ async def log_requests(request: Request, call_next):
     start_time = time.time()
     
     # Log the request with full details
-        logger.info(
-            "Request received",
-            method=request.method,
-            url=str(request.url),
-            path=request.url.path,
-            query_params=redact_sensitive_data(dict(request.query_params)),
-            client=request.client.host if request.client else None,
-            headers=redact_sensitive_data(dict(request.headers)),
-        )
+    logger.info(
+        "Request received",
+        method=request.method,
+        url=str(request.url),
+        path=request.url.path,
+        query_params=redact_sensitive_data(dict(request.query_params)),
+        client=request.client.host if request.client else None,
+        headers=redact_sensitive_data(dict(request.headers)),
+    )
     
     try:
         # Process the request
