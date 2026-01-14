@@ -8,6 +8,8 @@ from app.routers.plugins import plugin_manager
 from app.plugins.service_installler.start_stop_plugin_services import start_plugin_services_on_startup, stop_all_plugin_services_on_shutdown
 from app.core.job_manager_provider import initialize_job_manager, shutdown_job_manager
 from app.middleware.request_size import RequestSizeMiddleware
+from app.middleware.request_id import RequestIdMiddleware
+from app.core.audit.redaction import redact_sensitive_data
 import logging
 import time
 import structlog
@@ -29,6 +31,7 @@ app.add_middleware(
     RequestSizeMiddleware,
     max_size=settings.MAX_REQUEST_SIZE
 )
+app.add_middleware(RequestIdMiddleware)
 
 # Add startup event to initialize settings
 @app.on_event("startup")
@@ -63,15 +66,15 @@ async def log_requests(request: Request, call_next):
     start_time = time.time()
     
     # Log the request with full details
-    logger.info(
-        "Request received",
-        method=request.method,
-        url=str(request.url),
-        path=request.url.path,
-        query_params=str(request.query_params),
-        client=request.client.host if request.client else None,
-        headers=dict(request.headers),
-    )
+        logger.info(
+            "Request received",
+            method=request.method,
+            url=str(request.url),
+            path=request.url.path,
+            query_params=redact_sensitive_data(dict(request.query_params)),
+            client=request.client.host if request.client else None,
+            headers=redact_sensitive_data(dict(request.headers)),
+        )
     
     try:
         # Process the request
