@@ -565,8 +565,8 @@ async def delete_navigation_route(
         print(f"Attempting to delete route with ID: {route_id_str}")
         
         # Get existing route using raw SQL to avoid ORM issues
-        query = text(f"SELECT * FROM navigation_routes WHERE id = '{route_id_str}'")
-        result = await db.execute(query)
+        query = text("SELECT * FROM navigation_routes WHERE id = :route_id")
+        result = await db.execute(query, {"route_id": route_id_str})
         route_data = result.fetchone()
         
         if not route_data:
@@ -584,8 +584,8 @@ async def delete_navigation_route(
             )
         
         # Check if route has associated pages using raw SQL
-        pages_query = text(f"SELECT COUNT(*) FROM pages WHERE navigation_route_id = '{route_id_str}'")
-        pages_result = await db.execute(pages_query)
+        pages_query = text("SELECT COUNT(*) FROM pages WHERE navigation_route_id = :route_id")
+        pages_result = await db.execute(pages_query, {"route_id": route_id_str})
         page_count = pages_result.scalar()
         
         if page_count > 0:
@@ -595,8 +595,8 @@ async def delete_navigation_route(
             )
         
         # Delete route using raw SQL
-        delete_query = text(f"DELETE FROM navigation_routes WHERE id = '{route_id_str}'")
-        await db.execute(delete_query)
+        delete_query = text("DELETE FROM navigation_routes WHERE id = :route_id")
+        await db.execute(delete_query, {"route_id": route_id_str})
         await db.commit()
         
         print(f"Successfully deleted route with ID: {route_id_str}")
@@ -611,5 +611,4 @@ async def delete_navigation_route(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to delete navigation route: {str(e)}"
         )
-
 
