@@ -38,6 +38,7 @@ class AuditEventType(str, Enum):
     ADMIN_SETTINGS_UPDATED = "admin.settings_updated"
     ADMIN_SETTINGS_DELETED = "admin.settings_deleted"
     ADMIN_DIAGNOSTICS_ACCESSED = "admin.diagnostics_accessed"
+    ADMIN_PLUGIN_ROUTES_RELOADED = "admin.plugin_routes_reloaded"
     
     # Plugin lifecycle events
     PLUGIN_ENABLED = "plugin.enabled"

@@ -128,5 +128,26 @@ class Settings(BaseSettings):
         "extra": "ignore",
     }
 
+    # Properties for CORS lists (used by main.py)
+    @property
+    def cors_origins_list(self) -> List[str]:
+        """Return CORS origins as a list."""
+        return self.CORS_ORIGINS if self.CORS_ORIGINS else ["*"]
+
+    @property
+    def cors_methods_list(self) -> List[str]:
+        """Return CORS methods as a list."""
+        return self.CORS_METHODS
+
+    @property
+    def cors_headers_list(self) -> List[str]:
+        """Return CORS headers as a list."""
+        return self.CORS_HEADERS
+
+    @property
+    def cors_expose_headers_list(self) -> List[str]:
+        """Return CORS expose headers as a list."""
+        return self.CORS_EXPOSE_HEADERS
+
 settings = Settings()
 __all__ = ["settings"]
