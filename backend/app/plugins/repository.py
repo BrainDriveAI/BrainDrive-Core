@@ -594,21 +594,190 @@ class PluginRepository:
                 .returning(Module.id)
             )
             updated_id = result.scalar_one_or_none()
-            
+
             if not updated_id:
-                logger.warning("Module not found for status update", 
-                              plugin_id=plugin_id, 
+                logger.warning("Module not found for status update",
+                              plugin_id=plugin_id,
                               module_id=module_id)
                 return False
-            
+
             # Commit changes
             await self.db.commit()
-            
+
             return True
         except Exception as e:
             await self.db.rollback()
-            logger.error("Error updating module status", 
-                        plugin_id=plugin_id, 
-                        module_id=module_id, 
+            logger.error("Error updating module status",
+                        plugin_id=plugin_id,
+                        module_id=module_id,
                         error=str(e))
+            raise
+
+    # -------------------------------------------------------------------------
+    # Backend Plugin Methods
+    # -------------------------------------------------------------------------
+
+    async def get_backend_plugins(self, user_id: str) -> List[Dict[str, Any]]:
+        """
+        Get all backend plugins for a user.
+
+        Returns plugins where plugin_type is 'backend' or 'fullstack'.
+
+        Args:
+            user_id: The user ID to filter by
+
+        Returns:
+            List of plugin dictionaries
+        """
+        try:
+            query = select(Plugin).where(
+                Plugin.user_id == user_id,
+                Plugin.plugin_type.in_(["backend", "fullstack"])
+            )
+
+            result = await self.db.execute(query)
+            plugins = result.scalars().all()
+
+            logger.info(
+                "Retrieved backend plugins",
+                user_id=user_id,
+                count=len(plugins)
+            )
+
+            return [plugin.to_dict() for plugin in plugins]
+        except Exception as e:
+            logger.error(
+                "Error getting backend plugins",
+                user_id=user_id,
+                error=str(e)
+            )
+            raise
+
+    async def get_enabled_backend_plugins(self, user_id: str) -> List[Dict[str, Any]]:
+        """
+        Get all enabled backend plugins for a user.
+
+        Returns enabled plugins where plugin_type is 'backend' or 'fullstack'.
+
+        Args:
+            user_id: The user ID to filter by
+
+        Returns:
+            List of plugin dictionaries
+        """
+        try:
+            query = select(Plugin).where(
+                Plugin.user_id == user_id,
+                Plugin.enabled == True,
+                Plugin.plugin_type.in_(["backend", "fullstack"])
+            )
+
+            result = await self.db.execute(query)
+            plugins = result.scalars().all()
+
+            logger.info(
+                "Retrieved enabled backend plugins",
+                user_id=user_id,
+                count=len(plugins)
+            )
+
+            return [plugin.to_dict() for plugin in plugins]
+        except Exception as e:
+            logger.error(
+                "Error getting enabled backend plugins",
+                user_id=user_id,
+                error=str(e)
+            )
+            raise
+
+    async def get_plugins_depending_on(
+        self, backend_slug: str, user_id: str
+    ) -> List[Dict[str, Any]]:
+        """
+        Get all plugins that depend on a specific backend plugin.
+
+        Used for cascade disable - when disabling a backend plugin,
+        find all plugins that have it in their backend_dependencies.
+
+        Args:
+            backend_slug: The slug of the backend plugin to check dependencies for
+            user_id: The user ID to filter by
+
+        Returns:
+            List of plugin dictionaries that depend on the specified backend plugin
+        """
+        try:
+            # Query plugins that have backend_dependencies containing the slug
+            # backend_dependencies is stored as JSON text, so we search for the slug
+            query = select(Plugin).where(
+                Plugin.user_id == user_id,
+                Plugin.backend_dependencies.isnot(None),
+                Plugin.backend_dependencies != "[]",
+                Plugin.backend_dependencies != ""
+            )
+
+            result = await self.db.execute(query)
+            plugins = result.scalars().all()
+
+            # Filter in Python to check if backend_slug is in the dependencies list
+            dependent_plugins = []
+            for plugin in plugins:
+                if plugin.backend_dependencies:
+                    try:
+                        deps = json.loads(plugin.backend_dependencies)
+                        if isinstance(deps, list) and backend_slug in deps:
+                            dependent_plugins.append(plugin.to_dict())
+                    except json.JSONDecodeError:
+                        logger.warning(
+                            "Invalid JSON in backend_dependencies",
+                            plugin_id=plugin.id,
+                            plugin_slug=plugin.plugin_slug
+                        )
+
+            logger.info(
+                "Retrieved plugins depending on backend",
+                backend_slug=backend_slug,
+                user_id=user_id,
+                dependent_count=len(dependent_plugins)
+            )
+
+            return dependent_plugins
+        except Exception as e:
+            logger.error(
+                "Error getting plugins depending on backend",
+                backend_slug=backend_slug,
+                user_id=user_id,
+                error=str(e)
+            )
+            raise
+
+    async def get_all_enabled_backend_plugins(self) -> List[Dict[str, Any]]:
+        """
+        Get all enabled backend plugins across all users.
+
+        Used by the route loader on startup to load all backend plugin routes.
+
+        Returns:
+            List of plugin dictionaries with user_id included
+        """
+        try:
+            query = select(Plugin).where(
+                Plugin.enabled == True,
+                Plugin.plugin_type.in_(["backend", "fullstack"])
+            )
+
+            result = await self.db.execute(query)
+            plugins = result.scalars().all()
+
+            logger.info(
+                "Retrieved all enabled backend plugins",
+                count=len(plugins)
+            )
+
+            return [plugin.to_dict() for plugin in plugins]
+        except Exception as e:
+            logger.error(
+                "Error getting all enabled backend plugins",
+                error=str(e)
+            )
             raise
