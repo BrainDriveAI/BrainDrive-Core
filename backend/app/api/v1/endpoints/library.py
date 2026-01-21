@@ -49,6 +49,20 @@ class FileReadResponse(BaseModel):
     exists: bool
 
 
+class FileAppendRequest(BaseModel):
+    """Request to append content to a Library file."""
+    project_slug: str
+    filename: str
+    content: str
+
+
+class FileAppendResponse(BaseModel):
+    """Response after appending to a file."""
+    filename: str
+    success: bool
+    message: str
+
+
 def _validate_path(requested_path: Path) -> bool:
     """
     Validate that a path is within the Library directory.
@@ -262,3 +276,77 @@ async def get_project_context(
                 pass  # Leave as empty string
 
     return context
+
+
+@router.post("/library/append-file", response_model=FileAppendResponse)
+async def append_to_project_file(
+    request: FileAppendRequest,
+    auth: AuthContext = Depends(require_user),
+) -> FileAppendResponse:
+    """
+    Append content to a Library project file.
+
+    Only allows writing to specific documentation files for security:
+    - research-findings.md
+    - ideas.md
+
+    Args:
+        request: Contains project_slug, filename, and content to append.
+
+    Returns:
+        Success status and message.
+    """
+    # Strictly allowed files for writing (security)
+    allowed_write_files = {"research-findings.md", "ideas.md"}
+
+    # Validate filename
+    if request.filename not in allowed_write_files:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Writing to this file is not allowed. Allowed: {allowed_write_files}"
+        )
+
+    # Validate project slug - no path components
+    if '/' in request.project_slug or '\\' in request.project_slug or '..' in request.project_slug:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid project slug"
+        )
+
+    # Find project directory (only in active projects for writing)
+    project_dir = LIBRARY_BASE / "projects" / "active" / request.project_slug
+
+    if not project_dir.exists() or not project_dir.is_dir():
+        raise HTTPException(status_code=404, detail="Project not found in active projects")
+
+    if not _validate_path(project_dir):
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    # Build file path
+    file_path = project_dir / request.filename
+
+    # Final path validation
+    if not _validate_path(file_path):
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    try:
+        # Create file with header if it doesn't exist
+        if not file_path.exists():
+            header = f"# {request.filename.replace('.md', '').replace('-', ' ').title()}\n\n"
+            header += "Findings and notes captured from research sessions.\n\n---\n"
+            file_path.write_text(header, encoding='utf-8')
+
+        # Append the content
+        with open(file_path, 'a', encoding='utf-8') as f:
+            f.write(request.content)
+
+        return FileAppendResponse(
+            filename=request.filename,
+            success=True,
+            message=f"Content appended to {request.filename}"
+        )
+
+    except PermissionError:
+        raise HTTPException(status_code=403, detail="Permission denied writing to file")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to write file: {str(e)}")
