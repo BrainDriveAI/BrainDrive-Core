@@ -16,6 +16,9 @@ import json
 # Import the lifecycle API router
 from ..plugins.lifecycle_api import router as lifecycle_router
 
+# Import route loader for backend plugin support
+from ..plugins.route_loader import get_plugin_loader
+
 logger = structlog.get_logger()
 
 # Initialize plugin manager with the correct plugins directory
@@ -936,30 +939,94 @@ async def update_plugin_status(
     db: AsyncSession = Depends(get_db),
     auth: AuthContext = Depends(require_user)
 ):
-    """Enable or disable a plugin."""
+    """Enable or disable a plugin.
+
+    For backend plugins, this will also trigger a route reload.
+    When disabling a backend plugin, dependent frontend plugins will be
+    cascade-disabled to prevent broken dependencies.
+    """
     try:
         if "enabled" not in data:
             raise HTTPException(status_code=400, detail="Missing 'enabled' field in request body")
-        
+
         enabled = bool(data["enabled"])
-        
-        # Check if plugin belongs to current user
-        plugin = await db.execute(
+
+        # Get plugin details including type
+        result = await db.execute(
             select(Plugin).where(
                 Plugin.id == plugin_id,
                 Plugin.user_id == auth.user_id
             )
         )
-        if not plugin.scalars().first():
+        plugin = result.scalars().first()
+        if not plugin:
             raise HTTPException(status_code=404, detail=f"Plugin {plugin_id} not found or you don't have permission")
-        
+
+        plugin_type = plugin.plugin_type or 'frontend'
+        plugin_slug = plugin.plugin_slug
+        cascade_disabled = []
+
         repo = PluginRepository(db)
+
+        # Cascade disable: when disabling a backend plugin, disable dependent plugins first
+        if not enabled and plugin_type in ('backend', 'fullstack'):
+            dependent_plugins = await repo.get_plugins_depending_on(plugin_slug, auth.user_id)
+            for dep_plugin in dependent_plugins:
+                if dep_plugin.get('enabled', False):
+                    dep_id = dep_plugin.get('id')
+                    dep_slug = dep_plugin.get('pluginSlug', dep_plugin.get('plugin_slug'))
+                    logger.info(
+                        "Cascade disabling dependent plugin",
+                        backend_slug=plugin_slug,
+                        dependent_slug=dep_slug,
+                    )
+                    await repo.update_plugin_status(dep_id, False)
+                    cascade_disabled.append({
+                        'id': dep_id,
+                        'slug': dep_slug,
+                        'reason': f"Depends on backend plugin '{plugin_slug}' which was disabled"
+                    })
+
+        # Update the plugin status
         success = await repo.update_plugin_status(plugin_id, enabled)
-        
+
         if not success:
             raise HTTPException(status_code=404, detail=f"Plugin {plugin_id} not found")
-        
-        return {"status": "success", "message": f"Plugin {plugin_id} {'enabled' if enabled else 'disabled'} successfully"}
+
+        # Trigger route reload for backend/fullstack plugins
+        if plugin_type in ('backend', 'fullstack'):
+            try:
+                logger.info(
+                    f"Triggering route reload after {'enable' if enabled else 'disable'}",
+                    plugin_slug=plugin_slug,
+                    plugin_type=plugin_type,
+                )
+                loader = get_plugin_loader()
+                reload_result = await loader.reload_routes(db)
+                logger.info(
+                    f"Route reload completed after {'enable' if enabled else 'disable'}",
+                    plugin_slug=plugin_slug,
+                    loaded_count=len(reload_result.loaded),
+                    error_count=len(reload_result.errors),
+                )
+            except Exception as e:
+                logger.error(
+                    f"Route reload failed after {'enable' if enabled else 'disable'}",
+                    plugin_slug=plugin_slug,
+                    error=str(e),
+                )
+
+        response = {
+            "status": "success",
+            "message": f"Plugin {plugin_id} {'enabled' if enabled else 'disabled'} successfully"
+        }
+
+        # Include cascade-disabled plugins in response
+        if cascade_disabled:
+            response["cascade_disabled"] = cascade_disabled
+            response["message"] += f" ({len(cascade_disabled)} dependent plugin(s) also disabled)"
+
+        return response
     except HTTPException:
         raise
     except Exception as e:

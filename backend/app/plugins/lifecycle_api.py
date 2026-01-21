@@ -24,7 +24,177 @@ from pydantic import BaseModel
 # Import the remote installer
 from .remote_installer import RemotePluginInstaller, install_plugin_from_url
 
+# Import route loader for backend plugin support
+from .route_loader import get_plugin_loader
+
+# Import repository for backend plugin queries
+from .repository import PluginRepository
+
 logger = structlog.get_logger()
+
+
+async def _trigger_route_reload_if_backend(
+    plugin_slug: str,
+    plugin_type: str,
+    db: AsyncSession,
+    operation: str
+) -> None:
+    """
+    Trigger a route reload if the plugin is a backend or fullstack plugin.
+
+    Args:
+        plugin_slug: The slug of the plugin
+        plugin_type: The plugin_type field (frontend, backend, fullstack)
+        db: Database session
+        operation: The operation that triggered the reload (for logging)
+    """
+    if plugin_type in ("backend", "fullstack"):
+        try:
+            logger.info(
+                f"Triggering route reload after {operation}",
+                plugin_slug=plugin_slug,
+                plugin_type=plugin_type,
+            )
+            loader = get_plugin_loader()
+            result = await loader.reload_routes(db)
+            logger.info(
+                f"Route reload completed after {operation}",
+                plugin_slug=plugin_slug,
+                loaded_count=len(result.loaded),
+                error_count=len(result.errors),
+            )
+        except Exception as e:
+            # Log error but don't fail the operation - route reload is best-effort
+            logger.error(
+                f"Route reload failed after {operation}",
+                plugin_slug=plugin_slug,
+                error=str(e),
+            )
+
+
+async def _auto_install_backend_dependencies(
+    plugin_slug: str,
+    user_id: str,
+    db: AsyncSession
+) -> Dict[str, Any]:
+    """
+    Check for and auto-install backend dependencies for a plugin.
+
+    This function loads the plugin's lifecycle manager to get its metadata,
+    then checks if it has backend_dependencies. If so, it installs any
+    missing backend plugins before the main plugin can be installed.
+
+    Args:
+        plugin_slug: The slug of the plugin being installed
+        user_id: The user ID installing the plugin
+        db: Database session
+
+    Returns:
+        Dict with 'success', 'auto_installed' (list of installed deps),
+        and 'errors' if any dependencies failed to install
+    """
+    result = {
+        'success': True,
+        'auto_installed': [],
+        'errors': []
+    }
+
+    try:
+        # Load the plugin manager to get metadata
+        manager = universal_manager._load_plugin_manager(plugin_slug)
+        if not manager:
+            # Can't get metadata, proceed without auto-install
+            return result
+
+        # Get plugin metadata
+        if hasattr(manager, 'plugin_data'):
+            plugin_data = manager.plugin_data
+        elif hasattr(manager, 'PLUGIN_DATA'):
+            plugin_data = manager.PLUGIN_DATA
+        else:
+            # No plugin_data available
+            return result
+
+        # Check for backend_dependencies
+        backend_deps = plugin_data.get('backend_dependencies', [])
+        if not backend_deps:
+            return result
+
+        logger.info(
+            f"Plugin {plugin_slug} has backend dependencies",
+            dependencies=backend_deps,
+        )
+
+        # Check each dependency
+        repo = PluginRepository(db)
+        for dep_slug in backend_deps:
+            # Check if dependency is already installed for user
+            existing = await repo.get_plugin_by_slug(dep_slug, user_id)
+            if existing and existing.get('enabled', False):
+                logger.info(
+                    f"Backend dependency already installed",
+                    plugin_slug=plugin_slug,
+                    dependency=dep_slug,
+                )
+                continue
+
+            # Try to install the backend dependency
+            logger.info(
+                f"Auto-installing backend dependency",
+                plugin_slug=plugin_slug,
+                dependency=dep_slug,
+            )
+
+            try:
+                dep_result = await universal_manager.install_plugin(dep_slug, user_id, db)
+                if dep_result.get('success'):
+                    result['auto_installed'].append({
+                        'slug': dep_slug,
+                        'plugin_id': dep_result.get('plugin_id'),
+                    })
+                    logger.info(
+                        f"Auto-installed backend dependency successfully",
+                        plugin_slug=plugin_slug,
+                        dependency=dep_slug,
+                    )
+                else:
+                    error_msg = dep_result.get('error', 'Unknown error')
+                    result['errors'].append({
+                        'slug': dep_slug,
+                        'error': error_msg,
+                    })
+                    logger.error(
+                        f"Failed to auto-install backend dependency",
+                        plugin_slug=plugin_slug,
+                        dependency=dep_slug,
+                        error=error_msg,
+                    )
+            except Exception as e:
+                result['errors'].append({
+                    'slug': dep_slug,
+                    'error': str(e),
+                })
+                logger.error(
+                    f"Exception auto-installing backend dependency",
+                    plugin_slug=plugin_slug,
+                    dependency=dep_slug,
+                    error=str(e),
+                )
+
+        # If any required dependency failed, mark as failure
+        if result['errors']:
+            result['success'] = False
+
+        return result
+
+    except Exception as e:
+        logger.warning(
+            f"Could not check backend dependencies",
+            plugin_slug=plugin_slug,
+            error=str(e),
+        )
+        # Don't fail the install if we can't check dependencies
+        return result
 
 
 def _log_plugin_audit_background(
@@ -618,9 +788,26 @@ async def install_plugin(
     auth: AuthContext = Depends(require_user),
     db: AsyncSession = Depends(get_db)
 ):
-    """Install any plugin for the current user"""
+    """Install any plugin for the current user.
+
+    This endpoint automatically installs any backend dependencies
+    required by the plugin before installing the plugin itself.
+    """
     try:
         logger.info(f"Plugin installation requested: {plugin_slug} by user {auth.user_id}")
+
+        # Auto-install backend dependencies first
+        deps_result = await _auto_install_backend_dependencies(
+            plugin_slug, auth.user_id, db
+        )
+        if not deps_result['success']:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "message": "Failed to install required backend dependencies",
+                    "failed_dependencies": deps_result['errors']
+                }
+            )
 
         result = await universal_manager.install_plugin(plugin_slug, auth.user_id, db)
 
@@ -631,16 +818,28 @@ async def install_plugin(
                 plugin_id=result.get('plugin_id', plugin_slug),
                 plugin_name=plugin_slug
             )
-            
+
+            # Trigger route reload for backend/fullstack plugins
+            plugin_type = result.get('plugin_type', 'frontend')
+            await _trigger_route_reload_if_backend(
+                plugin_slug, plugin_type, db, "install"
+            )
+
+            response_data = {
+                "plugin_slug": plugin_slug,
+                "plugin_id": result.get('plugin_id'),
+                "modules_created": result.get('modules_created', []),
+                "plugin_directory": result.get('plugin_directory')
+            }
+
+            # Include auto-installed dependencies in response
+            if deps_result['auto_installed']:
+                response_data['auto_installed_dependencies'] = deps_result['auto_installed']
+
             return {
                 "status": "success",
                 "message": f"Plugin '{plugin_slug}' installed successfully",
-                "data": {
-                    "plugin_slug": plugin_slug,
-                    "plugin_id": result.get('plugin_id'),
-                    "modules_created": result.get('modules_created', []),
-                    "plugin_directory": result.get('plugin_directory')
-                }
+                "data": response_data
             }
         else:
             raise HTTPException(
@@ -668,6 +867,16 @@ async def uninstall_plugin(
     try:
         logger.info(f"Plugin uninstallation requested: {plugin_slug} by user {auth.user_id}")
 
+        # Get plugin type before deletion for route reload check
+        plugin_type = 'frontend'
+        try:
+            repo = PluginRepository(db)
+            plugin_data = await repo.get_plugin_by_slug(plugin_slug, auth.user_id)
+            if plugin_data:
+                plugin_type = plugin_data.get('pluginType', 'frontend')
+        except Exception as e:
+            logger.warning(f"Could not get plugin type before deletion: {e}")
+
         result = await universal_manager.delete_plugin(plugin_slug, auth.user_id, db)
 
         if result['success']:
@@ -677,7 +886,12 @@ async def uninstall_plugin(
                 plugin_id=result.get('plugin_id', plugin_slug),
                 plugin_name=plugin_slug
             )
-            
+
+            # Trigger route reload for backend/fullstack plugins
+            await _trigger_route_reload_if_backend(
+                plugin_slug, plugin_type, db, "uninstall"
+            )
+
             return {
                 "status": "success",
                 "message": f"Plugin '{plugin_slug}' uninstalled successfully",
@@ -999,6 +1213,12 @@ async def install_plugin_unified(
             )
             
             if result['success']:
+                # Trigger route reload for backend/fullstack plugins
+                plugin_type = result.get('plugin_type', 'frontend')
+                await _trigger_route_reload_if_backend(
+                    result.get('plugin_slug', 'unknown'), plugin_type, db, "github_install"
+                )
+
                 return {
                     "status": "success",
                     "message": f"Plugin installed successfully from {repo_url}",
@@ -1082,6 +1302,12 @@ async def install_plugin_unified(
                 )
                 
                 if result['success']:
+                    # Trigger route reload for backend/fullstack plugins
+                    plugin_type = result.get('plugin_type', 'frontend')
+                    await _trigger_route_reload_if_backend(
+                        result.get('plugin_slug', 'unknown'), plugin_type, db, "local_file_install"
+                    )
+
                     return {
                         "status": "success",
                         "message": f"Plugin '{filename}' installed successfully from local file",
@@ -1164,6 +1390,12 @@ async def install_plugin_from_repository(
 
             # Get plugin name for display, fallback to slug if name not available
             plugin_name = result.get('plugin_name') or result.get('plugin_slug') or 'Unknown Plugin'
+
+            # Trigger route reload for backend/fullstack plugins
+            plugin_type = result.get('plugin_type', 'frontend')
+            await _trigger_route_reload_if_backend(
+                result.get('plugin_slug', 'unknown'), plugin_type, db, "remote_install"
+            )
 
             return {
                 "status": "success",
@@ -1286,7 +1518,13 @@ async def update_plugin(
                 plugin_name=plugin_slug,
                 metadata={"previous_version": plugin.version, "new_version": result.get('version', 'latest')}
             )
-            
+
+            # Trigger route reload for backend/fullstack plugins
+            plugin_type = plugin.plugin_type if hasattr(plugin, 'plugin_type') else 'frontend'
+            await _trigger_route_reload_if_backend(
+                plugin_slug, plugin_type or 'frontend', db, "update"
+            )
+
             return {
                 "status": "success",
                 "message": f"Plugin '{plugin_slug}' updated successfully",
@@ -1307,7 +1545,13 @@ async def update_plugin(
                     plugin_name=plugin_slug,
                     metadata={"previous_version": plugin.version, "new_version": "1.0.5"}
                 )
-                
+
+                # Trigger route reload for backend/fullstack plugins
+                plugin_type = plugin.plugin_type if hasattr(plugin, 'plugin_type') else 'frontend'
+                await _trigger_route_reload_if_backend(
+                    plugin_slug, plugin_type or 'frontend', db, "update"
+                )
+
                 return {
                     "status": "success",
                     "message": f"Plugin '{plugin_slug}' updated successfully",
