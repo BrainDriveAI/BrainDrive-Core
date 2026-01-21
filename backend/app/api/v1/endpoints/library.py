@@ -4,8 +4,12 @@ BrainDrive Library API Endpoints
 Provides read access to the BrainDrive-Library for plugins that need
 to access project context, documentation, and other Library content.
 
+Configuration:
+- Set LIBRARY_PATH in .env to configure the Library location
+- Default: ~/BrainDrive-Library
+
 Security:
-- All paths are validated to stay within ~/BrainDrive-Library/
+- All paths are validated to stay within the configured LIBRARY_PATH
 - Path traversal attacks (../) are blocked
 - Requires authenticated user
 """
@@ -18,11 +22,25 @@ import os
 
 from app.core.auth_deps import require_user
 from app.core.auth_context import AuthContext
+from app.core.config import settings
 
 router = APIRouter(tags=["library"])
 
-# Base path for the BrainDrive Library
-LIBRARY_BASE = Path.home() / "BrainDrive-Library"
+
+def _get_library_base() -> Path:
+    """
+    Get the Library base path from settings.
+    Supports ~ expansion for home directory.
+    """
+    library_path = settings.LIBRARY_PATH
+    # Expand ~ to home directory if present
+    if library_path.startswith("~"):
+        return Path(library_path).expanduser()
+    return Path(library_path)
+
+
+# Base path for the BrainDrive Library (configurable via LIBRARY_PATH in .env)
+LIBRARY_BASE = _get_library_base()
 
 
 class ProjectInfo(BaseModel):

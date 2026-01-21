@@ -64,6 +64,11 @@ class Settings(BaseSettings):
     JOB_WORKER_TOKEN: str = ""  # For background job worker callbacks
     PLUGIN_LIFECYCLE_TOKEN: str = ""  # For plugin lifecycle operations
 
+    # BrainDrive Library
+    # Path to the BrainDrive-Library folder (configurable via .env)
+    # Default: ~/BrainDrive-Library
+    LIBRARY_PATH: str = str(Path.home() / "BrainDrive-Library")
+
     # Database
     DATABASE_URL: str = "sqlite:///braindrive.db"
     DATABASE_TYPE: str = "sqlite"
