@@ -25,6 +25,8 @@ export interface LegacyPluginInstallRequest {
   version?: string;
 }
 
+export type PluginType = 'frontend' | 'backend' | 'fullstack';
+
 export interface PluginInstallResponse {
   status: 'success' | 'error';
   message: string;
@@ -38,6 +40,7 @@ export interface PluginInstallResponse {
     version?: string; // Optional for file uploads
     filename?: string; // For file uploads
     file_size?: number; // For file uploads
+    plugin_type?: PluginType; // Backend plugin architecture field
   };
   error?: string;
 }

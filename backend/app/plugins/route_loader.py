@@ -43,8 +43,9 @@ from app.models.plugin import Plugin
 logger = structlog.get_logger()
 
 
-# Plugin route prefix - all plugin routes are mounted here
-PLUGIN_ROUTE_PREFIX = "/api/v1/plugins"
+# Plugin route prefix - backend plugin dynamic routes are mounted here
+# Using a distinct prefix to avoid conflicts with core plugin management routes
+PLUGIN_ROUTE_PREFIX = "/api/v1/plugin-api"
 
 
 @dataclass

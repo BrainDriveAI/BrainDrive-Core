@@ -9,6 +9,8 @@ export { default as ModuleFilters } from './components/ModuleFilters';
 export { default as ModuleStatusToggle } from './components/ModuleStatusToggle';
 export { default as ModuleDetailHeader } from './components/ModuleDetailHeader';
 export { default as PluginUpdatesPanel } from './components/PluginUpdatesPanel';
+export { default as PluginTypeTabs } from './components/PluginTypeTabs';
+export { default as BackendPluginWarningDialog } from './components/BackendPluginWarningDialog';
 
 // Export hooks
 export { default as useModules } from './hooks/useModules';
