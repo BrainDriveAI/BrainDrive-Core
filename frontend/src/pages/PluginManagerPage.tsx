@@ -5,9 +5,10 @@ import { Add as AddIcon } from '@mui/icons-material';
 import ModuleSearch from '../features/plugin-manager/components/ModuleSearch';
 import ModuleFilters from '../features/plugin-manager/components/ModuleFilters';
 import ModuleGrid from '../features/plugin-manager/components/ModuleGrid';
+import PluginTypeTabs from '../features/plugin-manager/components/PluginTypeTabs';
 import useModules from '../features/plugin-manager/hooks/useModules';
 import useModuleFilters from '../features/plugin-manager/hooks/useModuleFilters';
-import { Module } from '../features/plugin-manager/types';
+import { Module, PluginType } from '../features/plugin-manager/types';
 
 /**
  * The main page for browsing and searching modules
@@ -24,8 +25,9 @@ const PluginManagerPage: React.FC = () => {
   const navigate = useNavigate();
   const [searchQuery, setSearchQuery] = useState('');
   const [page, setPage] = useState(1);
+  const [selectedPluginType, setSelectedPluginType] = useState<PluginType | 'all'>('all');
   const pageSize = 16; // 4x4 grid
-  
+
   const {
     categories,
     tags,
@@ -34,17 +36,18 @@ const PluginManagerPage: React.FC = () => {
     setSelectedCategory,
     setSelectedTags
   } = useModuleFilters();
-  
-  const { 
-    modules, 
-    totalModules, 
-    loading, 
-    error, 
-    toggleModuleStatus 
+
+  const {
+    modules,
+    totalModules,
+    loading,
+    error,
+    toggleModuleStatus
   } = useModules({
     search: searchQuery,
     category: selectedCategory,
     tags: selectedTags,
+    pluginType: selectedPluginType === 'all' ? null : selectedPluginType,
     page,
     pageSize
   });
@@ -53,6 +56,12 @@ const PluginManagerPage: React.FC = () => {
     console.log(`Search query changed to: ${query}`);
     setSearchQuery(query);
     setPage(1); // Reset to first page on new search
+  }, []);
+
+  const handlePluginTypeChange = useCallback((type: PluginType | 'all') => {
+    console.log(`Plugin type changed to: ${type}`);
+    setSelectedPluginType(type);
+    setPage(1); // Reset to first page on type change
   }, []);
 
   const handleModuleClick = useCallback((module: Module) => {
@@ -91,8 +100,13 @@ const PluginManagerPage: React.FC = () => {
       </Box>
       
       <Paper sx={{ p: 3, mb: 3 }}>
+        <PluginTypeTabs
+          selectedType={selectedPluginType}
+          onTypeChange={handlePluginTypeChange}
+        />
+
         <ModuleSearch onSearch={handleSearch} />
-        
+
         <ModuleFilters
           categories={categories}
           selectedCategory={selectedCategory}

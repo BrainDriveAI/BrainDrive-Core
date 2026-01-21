@@ -343,6 +343,7 @@ async def get_plugins_for_manager(
     search: Optional[str] = None,
     category: Optional[str] = None,
     tags: Optional[str] = None,
+    plugin_type: Optional[str] = None,
     page: int = Query(1, ge=1),
     pageSize: int = Query(16, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
@@ -350,20 +351,27 @@ async def get_plugins_for_manager(
 ):
     """
     Get all modules with optional filtering for the plugin manager.
-    
+
     Args:
         search: Optional search term to filter modules by name, display name, or description
         category: Optional category to filter modules by
         tags: Optional comma-separated list of tags to filter modules by
+        plugin_type: Optional plugin type filter (frontend, backend, fullstack)
         page: Page number for pagination (1-based)
         pageSize: Number of items per page
     """
     try:
         # Parse tags if provided
         tag_list = tags.split(',') if tags else []
-        
-        # Build query for modules
+
+        # Build query for modules with join to plugin table for plugin_type filtering
         query = select(Module).where(Module.user_id == auth.user_id)
+
+        # Filter by plugin_type if provided
+        if plugin_type:
+            query = query.join(Plugin, Module.plugin_id == Plugin.id).where(
+                Plugin.plugin_type == plugin_type
+            )
         
         # Apply filters
         if search:
@@ -399,20 +407,31 @@ async def get_plugins_for_manager(
         end_idx = start_idx + pageSize
         paginated_modules = all_modules[start_idx:end_idx]
         
+        # Get plugin_type for each module's plugin
+        plugin_ids = list(set(m.plugin_id for m in paginated_modules))
+        plugin_types = {}
+        if plugin_ids:
+            plugin_query = select(Plugin.id, Plugin.plugin_type).where(Plugin.id.in_(plugin_ids))
+            plugin_result = await db.execute(plugin_query)
+            plugin_types = {row[0]: row[1] for row in plugin_result}
+
         # Convert to dictionaries
         module_dicts = []
         for module in paginated_modules:
             module_dict = module.to_dict()
-            
+
             # Parse tags from JSON string
             if module_dict.get('tags') and isinstance(module_dict['tags'], str):
                 try:
                     module_dict['tags'] = json.loads(module_dict['tags'])
                 except json.JSONDecodeError:
                     module_dict['tags'] = []
-            
+
+            # Add plugin_type from parent plugin
+            module_dict['pluginType'] = plugin_types.get(module.plugin_id, 'frontend')
+
             module_dicts.append(module_dict)
-        
+
         return {
             "modules": module_dicts,
             "totalItems": total_items

@@ -1,11 +1,12 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { Module } from '../types';
+import { Module, PluginType } from '../types';
 import moduleService from '../services/moduleService';
 
 interface UseModulesOptions {
   search?: string;
   category?: string | null;
   tags?: string[];
+  pluginType?: PluginType | null;
   page?: number;
   pageSize?: number;
 }
@@ -37,10 +38,11 @@ export const useModules = (options: UseModulesOptions = {}): UseModulesResult =>
       search: options.search || '',
       category: options.category || null,
       tags: options.tags || [],
+      pluginType: options.pluginType || null,
       page: options.page || 1,
       pageSize: options.pageSize || 16
     };
-  }, [options.search, options.category, options.tags?.join(','), options.page, options.pageSize]);
+  }, [options.search, options.category, options.tags?.join(','), options.pluginType, options.page, options.pageSize]);
 
   const fetchModules = useCallback(async () => {
     try {
