@@ -91,6 +91,10 @@ class Settings(BaseSettings):
 
     ENCRYPTION_MASTER_KEY: str = ""
     ENABLE_TEST_ROUTES: bool = True
+
+    # Library Configuration
+    # Path to the BrainDrive Library folder (supports ~ for home directory)
+    LIBRARY_PATH: str = "~/BrainDrive-Library"
     CORS_METHODS: List[str] = ["GET", "POST", "PUT", "DELETE", "OPTIONS", "HEAD"]
     CORS_HEADERS: List[str] = ["Authorization", "Content-Type", "Accept", "Origin", "X-Requested-With"]
     @field_validator("CORS_ORIGINS", "CORS_EXPOSE_HEADERS", "CORS_DEV_HOSTS", mode="before")
