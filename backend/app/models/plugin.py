@@ -43,6 +43,11 @@ class Plugin(Base):
     installation_type = Column(String(20), default='local')  # Installation type: local or remote
     permissions = Column(Text, nullable=True)  # JSON array of required permissions
 
+    # Backend plugin fields
+    endpoints_file = Column(String, nullable=True)  # e.g., "endpoints.py"
+    route_prefix = Column(String, nullable=True)    # e.g., "/library"
+    backend_dependencies = Column(Text, nullable=True)  # JSON list of backend plugin slugs
+
     # JSON fields
     config_fields = Column(Text)  # Stored as JSON string
     messages = Column(Text)       # Stored as JSON string
@@ -100,8 +105,11 @@ class Plugin(Base):
             "updateAvailable": self.update_available,
             "latestVersion": self.latest_version,
             "installationType": self.installation_type,
+            # Backend plugin fields
+            "endpointsFile": self.endpoints_file,
+            "routePrefix": self.route_prefix,
         }
-        
+
         # Deserialize JSON fields
         if self.config_fields:
             result["configFields"] = json.loads(self.config_fields)
@@ -122,6 +130,11 @@ class Plugin(Base):
             result["permissions"] = json.loads(self.permissions)
         else:
             result["permissions"] = []
+
+        if self.backend_dependencies:
+            result["backendDependencies"] = json.loads(self.backend_dependencies)
+        else:
+            result["backendDependencies"] = []
 
         if self.required_services_runtime:
             result["requiredServicesRuntime"] = json.loads(self.required_services_runtime)
@@ -152,6 +165,9 @@ class Plugin(Base):
             "updateAvailable": "update_available",
             "latestVersion": "latest_version",
             "installationType": "installation_type",
+            "endpointsFile": "endpoints_file",
+            "routePrefix": "route_prefix",
+            "backendDependencies": "backend_dependencies",
         }
         
         # Create a new dictionary with snake_case keys
@@ -163,8 +179,8 @@ class Plugin(Base):
                 # Convert camelCase to snake_case
                 db_key = ''.join(['_' + c.lower() if c.isupper() else c for c in key]).lstrip('_')
             
-            # Handle special fields
-            if db_key in ["config_fields", "messages", "dependencies", "permissions"] and value is not None:
+            # Handle special fields (JSON serialization)
+            if db_key in ["config_fields", "messages", "dependencies", "permissions", "backend_dependencies"] and value is not None:
                 db_data[db_key] = json.dumps(value)
             else:
                 db_data[db_key] = value

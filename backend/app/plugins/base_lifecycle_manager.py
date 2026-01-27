@@ -41,7 +41,22 @@ class BaseLifecycleManager(ABC):
 
     @abstractmethod
     async def get_plugin_metadata(self) -> Dict[str, Any]:
-        """Return plugin metadata and configuration"""
+        """Return plugin metadata and configuration.
+
+        Required fields:
+            - name: str
+            - version: str
+            - description: str
+            - plugin_slug: str
+
+        Optional fields:
+            - type: str - "frontend" (default), "backend", or "fullstack"
+            - endpoints_file: str - Required for backend/fullstack plugins (e.g., "endpoints.py")
+            - route_prefix: str - API route prefix for backend plugins (e.g., "/library")
+            - backend_dependencies: List[str] - List of required backend plugin slugs
+
+        Note: Backend and fullstack plugins MUST specify endpoints_file.
+        """
         pass
 
     @abstractmethod
@@ -263,15 +278,44 @@ class BaseLifecycleManager(ABC):
         return self.__str__()
 
 
+# Valid plugin types
+VALID_PLUGIN_TYPES = {'frontend', 'backend', 'fullstack'}
+
+
 # Helper function to validate plugin metadata
 def validate_plugin_metadata(metadata: Dict[str, Any]) -> bool:
-    """Validate plugin metadata structure"""
+    """Validate plugin metadata structure.
+
+    Validates:
+        - Required fields are present
+        - plugin_type is valid (frontend, backend, fullstack)
+        - backend/fullstack plugins have endpoints_file
+        - backend_dependencies is a list if present
+    """
     required_fields = ['name', 'version', 'description', 'plugin_slug']
 
     for field in required_fields:
         if field not in metadata:
             logger.error(f"Missing required field '{field}' in plugin metadata")
             return False
+
+    # Validate plugin type if specified
+    plugin_type = metadata.get('type', 'frontend')
+    if plugin_type not in VALID_PLUGIN_TYPES:
+        logger.error(f"Invalid plugin type '{plugin_type}'. Must be one of: {VALID_PLUGIN_TYPES}")
+        return False
+
+    # Backend and fullstack plugins require endpoints_file
+    if plugin_type in ('backend', 'fullstack'):
+        if not metadata.get('endpoints_file'):
+            logger.error(f"Backend/fullstack plugins must specify 'endpoints_file'")
+            return False
+
+    # Validate backend_dependencies is a list if present
+    backend_deps = metadata.get('backend_dependencies')
+    if backend_deps is not None and not isinstance(backend_deps, list):
+        logger.error(f"'backend_dependencies' must be a list of plugin slugs")
+        return False
 
     return True
 
