@@ -91,6 +91,10 @@ class Settings(BaseSettings):
 
     ENCRYPTION_MASTER_KEY: str = ""
     ENABLE_TEST_ROUTES: bool = True
+
+    # Library Configuration
+    # Path to the BrainDrive Library folder (supports ~ for home directory)
+    LIBRARY_PATH: str = "~/BrainDrive-Library"
     CORS_METHODS: List[str] = ["GET", "POST", "PUT", "DELETE", "OPTIONS", "HEAD"]
     CORS_HEADERS: List[str] = ["Authorization", "Content-Type", "Accept", "Origin", "X-Requested-With"]
     @field_validator("CORS_ORIGINS", "CORS_EXPOSE_HEADERS", "CORS_DEV_HOSTS", mode="before")
@@ -127,6 +131,27 @@ class Settings(BaseSettings):
         "case_sensitive": True,
         "extra": "ignore",
     }
+
+    # Properties for CORS lists (used by main.py)
+    @property
+    def cors_origins_list(self) -> List[str]:
+        """Return CORS origins as a list."""
+        return self.CORS_ORIGINS if self.CORS_ORIGINS else ["*"]
+
+    @property
+    def cors_methods_list(self) -> List[str]:
+        """Return CORS methods as a list."""
+        return self.CORS_METHODS
+
+    @property
+    def cors_headers_list(self) -> List[str]:
+        """Return CORS headers as a list."""
+        return self.CORS_HEADERS
+
+    @property
+    def cors_expose_headers_list(self) -> List[str]:
+        """Return CORS expose headers as a list."""
+        return self.CORS_EXPOSE_HEADERS
 
 settings = Settings()
 __all__ = ["settings"]

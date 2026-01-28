@@ -7,6 +7,7 @@ from app.core.config import settings
 from app.routers.plugins import plugin_manager
 from app.plugins.service_installler.start_stop_plugin_services import start_plugin_services_on_startup, stop_all_plugin_services_on_shutdown
 from app.core.job_manager_provider import initialize_job_manager, shutdown_job_manager
+from app.plugins.route_loader import get_plugin_loader, initialize_plugin_routes
 import logging
 import time
 import structlog
@@ -30,10 +31,47 @@ async def startup_event():
     """Initialize required settings on application startup."""
     logger.info("Initializing application settings...")
     from app.init_settings import init_ollama_settings
+    from app.core.database import get_db
+
     await init_ollama_settings()
     await initialize_job_manager()
     # Start plugin services
     await start_plugin_services_on_startup()
+
+    # Initialize backend plugin routes
+    logger.info("Initializing backend plugin routes...")
+    try:
+        # Set the FastAPI app on the route loader
+        loader = get_plugin_loader()
+        loader.set_app(app)
+
+        # Load routes for all enabled backend plugins
+        async for db in get_db():
+            result = await loader.reload_routes(db)
+
+            if result.errors:
+                logger.warning(
+                    "Backend plugin route initialization completed with errors",
+                    loaded_count=len(result.loaded),
+                    error_count=len(result.errors),
+                    total_routes=result.total_routes,
+                    errors=[e.to_dict() for e in result.errors],
+                )
+            else:
+                logger.info(
+                    "Backend plugin routes initialized successfully",
+                    loaded_plugins=result.loaded,
+                    total_routes=result.total_routes,
+                )
+            break  # Only need one session
+    except Exception as e:
+        # Log error but don't fail startup - backend plugins are optional
+        logger.error(
+            "Failed to initialize backend plugin routes",
+            error=str(e),
+            exception_type=type(e).__name__,
+        )
+
     logger.info("Settings initialization completed")
 
 

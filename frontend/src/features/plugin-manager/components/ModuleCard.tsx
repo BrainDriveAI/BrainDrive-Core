@@ -1,5 +1,7 @@
 import React from 'react';
 import { Box, Card, CardContent, Typography, Chip, Switch, CardActionArea } from '@mui/material';
+import StorageIcon from '@mui/icons-material/Storage';
+import WebIcon from '@mui/icons-material/Web';
 import { Module } from '../types';
 import { IconResolver } from '../../../components/IconResolver';
 
@@ -63,15 +65,45 @@ export const ModuleCard: React.FC<ModuleCardProps> = ({
           height: '100%'
         }}>
           <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 1 }}>
-            <Box sx={{ display: 'flex', alignItems: 'center' }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, minWidth: 0, flex: 1 }}>
               {module.icon && (
-                <Box sx={{ mr: 1 }}>
+                <Box sx={{ flexShrink: 0 }}>
                   <IconResolver icon={module.icon} fontSize="small" />
                 </Box>
               )}
-              <Typography variant={compact ? "subtitle1" : "h6"} component="h2" noWrap sx={{ fontWeight: 'bold' }}>
+              <Typography variant={compact ? "subtitle1" : "h6"} component="h2" noWrap sx={{ fontWeight: 'bold', flex: 1, minWidth: 0 }}>
                 {module.displayName || module.name}
               </Typography>
+              {module.pluginType === 'backend' && (
+                <Chip
+                  icon={<StorageIcon sx={{ fontSize: 14 }} />}
+                  label="Backend"
+                  size="small"
+                  color="secondary"
+                  sx={{
+                    height: compact ? 18 : 22,
+                    fontSize: compact ? '0.6rem' : '0.7rem',
+                    flexShrink: 0,
+                    '& .MuiChip-icon': { ml: 0.5 },
+                    '& .MuiChip-label': { px: 0.5 }
+                  }}
+                />
+              )}
+              {module.pluginType === 'fullstack' && (
+                <Chip
+                  icon={<WebIcon sx={{ fontSize: 14 }} />}
+                  label="Fullstack"
+                  size="small"
+                  color="info"
+                  sx={{
+                    height: compact ? 18 : 22,
+                    fontSize: compact ? '0.6rem' : '0.7rem',
+                    flexShrink: 0,
+                    '& .MuiChip-icon': { ml: 0.5 },
+                    '& .MuiChip-label': { px: 0.5 }
+                  }}
+                />
+              )}
             </Box>
             <Switch
               size="small"
@@ -79,6 +111,7 @@ export const ModuleCard: React.FC<ModuleCardProps> = ({
               onChange={handleToggleStatus}
               onClick={(e) => e.stopPropagation()}
               color="primary"
+              sx={{ flexShrink: 0 }}
             />
           </Box>
           
