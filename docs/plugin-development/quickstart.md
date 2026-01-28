@@ -9,6 +9,8 @@ By the end of this guide you will be able to:
 - Use Service Bridges to access BrainDrive functionality
 - Build, test, and iterate on plugin ideas quickly
 
+Working on backend-only plugins? Start with the [Backend Plugin Development](./backend-plugins.md) guide.
+
 ## Prerequisites
 
 - Node.js 16+ installed

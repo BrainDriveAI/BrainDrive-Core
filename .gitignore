@@ -32,7 +32,6 @@ htmlcov/
 .nox/
 coverage/
 .hypothesis/
-backend/tests
 
 # SQLite database files
 *.sqlite

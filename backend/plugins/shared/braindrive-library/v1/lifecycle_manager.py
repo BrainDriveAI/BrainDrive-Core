@@ -19,6 +19,7 @@ logger = structlog.get_logger()
 # Import the base lifecycle manager
 try:
     from app.plugins.base_lifecycle_manager import BaseLifecycleManager
+    from app.plugins.repository import PluginRepository
     logger.info("BrainDrive Library: BaseLifecycleManager imported from app.plugins")
 except ImportError:
     # Fallback for development/testing
@@ -28,6 +29,7 @@ except ImportError:
     if backend_path not in sys.path:
         sys.path.insert(0, backend_path)
     from base_lifecycle_manager import BaseLifecycleManager
+    from repository import PluginRepository
     logger.info(f"BrainDrive Library: BaseLifecycleManager imported from {backend_path}")
 
 
@@ -161,6 +163,104 @@ a higher-level project-oriented interface.
                 "POST /projects - Create new project",
             ],
         }
+
+    # Compatibility methods for universal lifecycle API
+    async def _check_existing_plugin(self, user_id: str, db: AsyncSession) -> Dict[str, Any]:
+        """Check if the plugin is already installed for the user."""
+        try:
+            repo = PluginRepository(db)
+            plugin = await repo.get_plugin_by_slug(self.plugin_slug, user_id)
+            if plugin:
+                return {"exists": True, "plugin_id": plugin.get("id"), "plugin_info": plugin}
+            return {"exists": False}
+        except Exception as e:
+            logger.error(f"Library plugin: Error checking existing plugin: {e}")
+            return {"exists": False, "error": str(e)}
+
+    async def install_plugin(self, user_id: str, db: AsyncSession) -> Dict[str, Any]:
+        """Install BrainDrive Library plugin for the user (compatibility method)."""
+        try:
+            logger.info(f"Library plugin: Starting installation for user {user_id}")
+
+            existing_check = await self._check_existing_plugin(user_id, db)
+            if existing_check.get("exists"):
+                return {
+                    "success": False,
+                    "error": "Plugin already installed for user",
+                    "plugin_id": existing_check.get("plugin_id"),
+                }
+
+            plugin_id = f"{user_id}_{self.plugin_slug}"
+            plugin_type = self.plugin_data.get("plugin_type", "backend")
+
+            plugin_record = {
+                "id": plugin_id,
+                "plugin_slug": self.plugin_slug,
+                "name": self.plugin_data.get("name", "BrainDrive Library"),
+                "description": self.plugin_data.get("description", ""),
+                "version": self.plugin_data.get("version", "1.0.0"),
+                "type": plugin_type,
+                "pluginType": plugin_type,
+                "enabled": True,
+                "user_id": user_id,
+                "author": self.plugin_data.get("author"),
+                "official": self.plugin_data.get("official", True),
+                "category": self.plugin_data.get("category"),
+                "icon": self.plugin_data.get("icon"),
+                "compatibility": self.plugin_data.get("compatibility"),
+                "longDescription": self.plugin_data.get("long_description"),
+                "sourceType": self.plugin_data.get("source_type", "local"),
+                "sourceUrl": self.plugin_data.get("source_url"),
+                "updateCheckUrl": self.plugin_data.get("update_check_url"),
+                "lastUpdateCheck": self.plugin_data.get("last_update_check"),
+                "is_local": self.plugin_data.get("is_local", True),
+                "installationType": "local",
+                "endpointsFile": self.plugin_data.get("endpoints_file"),
+                "routePrefix": self.plugin_data.get("route_prefix"),
+                "backendDependencies": self.plugin_data.get("backend_dependencies", []),
+                "configFields": {},
+                "messages": {},
+                "dependencies": [],
+                "modules": [],
+            }
+
+            repo = PluginRepository(db)
+            await repo.insert_plugin(plugin_record)
+
+            logger.info(f"Library plugin: Installed plugin record {plugin_id}")
+
+            return {
+                "success": True,
+                "plugin_id": plugin_id,
+                "plugin_slug": self.plugin_slug,
+                "plugin_type": plugin_type,
+                "modules_created": [],
+                "plugin_directory": str(self.shared_path),
+            }
+        except Exception as e:
+            logger.error(f"Library plugin: Installation failed for user {user_id}: {e}")
+            return {"success": False, "error": str(e)}
+
+    async def delete_plugin(self, user_id: str, db: AsyncSession) -> Dict[str, Any]:
+        """Uninstall BrainDrive Library plugin for the user (compatibility method)."""
+        try:
+            logger.info(f"Library plugin: Starting uninstall for user {user_id}")
+
+            existing_check = await self._check_existing_plugin(user_id, db)
+            if not existing_check.get("exists"):
+                return {"success": False, "error": "Plugin not found for user"}
+
+            plugin_id = existing_check.get("plugin_id")
+            repo = PluginRepository(db)
+            deleted = await repo.delete_plugin(plugin_id)
+            if not deleted:
+                return {"success": False, "error": "Failed to delete plugin record"}
+
+            logger.info(f"Library plugin: Uninstalled plugin record {plugin_id}")
+            return {"success": True, "plugin_id": plugin_id, "deleted_modules": 0}
+        except Exception as e:
+            logger.error(f"Library plugin: Uninstall failed for user {user_id}: {e}")
+            return {"success": False, "error": str(e)}
 
 
 # Factory function for the lifecycle registry
