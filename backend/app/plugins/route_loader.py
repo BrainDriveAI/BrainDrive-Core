@@ -280,22 +280,15 @@ class PluginRouteLoader:
             major_version = plugin.version.split('.')[0]
             plugin_path = Path(__file__).parent.parent.parent / "plugins" / "shared" / plugin.plugin_slug / f"v{major_version}"
 
-            # Check if plugin has endpoints file configured
-            # For now, default to 'endpoints.py' if not specified
-            endpoints_file = "endpoints.py"
-
-            # Check if the plugin metadata specifies an endpoints file
-            # This would come from the lifecycle_manager.py plugin_data
-            # For MVP, we use convention over configuration
-
-            # Get route prefix from plugin metadata or default to plugin slug
-            route_prefix = f"/{plugin.plugin_slug}"
+            # Allow plugin metadata to override defaults
+            endpoints_file = plugin.endpoints_file or "endpoints.py"
+            route_prefix = plugin.route_prefix or f"/{plugin.plugin_slug}"
 
             plugin_info = PluginInfo(
                 slug=plugin.plugin_slug,
                 name=plugin.name,
                 version=plugin.version,
-                plugin_type=plugin.type,
+                plugin_type=plugin.plugin_type or plugin.type,
                 endpoints_file=endpoints_file,
                 route_prefix=route_prefix,
                 plugin_path=plugin_path,
@@ -514,13 +507,12 @@ class PluginRouteLoader:
         async def wrapper(
             request: Request,
             auth: AuthContext = Depends(require_admin if admin_only else require_user),
-            **kwargs
         ):
             # Create PluginRequest from auth context
             plugin_request = PluginRequest.from_auth_context(request, auth)
 
             # Call the original endpoint
-            return await endpoint_func(plugin_request, **kwargs)
+            return await endpoint_func(plugin_request, **request.path_params)
 
         # Preserve function metadata
         wrapper.__name__ = endpoint_func.__name__
