@@ -1,0 +1,166 @@
+/* Dark theme variables */
+.dark-theme {
+  --bg-color: #121a28;
+  --paper-bg: #1a2332;
+  --text-color: #e0e0e0;
+  --border-color: rgba(255, 255, 255, 0.1);
+  --hover-color: rgba(255, 255, 255, 0.1);
+  --input-bg: #1e293b;
+  --button-primary-bg: #2196f3;
+  --button-primary-text: #ffffff;
+  --button-secondary-bg: #2c3a4f;
+  --button-secondary-text: #ffffff;
+  --button-danger-bg: #f44336;
+  --button-danger-text: #ffffff;
+  --status-success-color: #4caf50;
+  --status-error-color: #f44336;
+  --status-checking-color: #ff9800;
+  --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.3);
+  --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.4);
+  --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.5);
+  --shadow-xl: 0 20px 25px -5px rgba(0, 0, 0, 0.6);
+}
+
+/* Dark theme adjustments for icons */
+.dark-theme .header-icon-only:hover:not(:disabled) {
+  background-color: rgba(255, 255, 255, 0.1);
+}
+
+.dark-theme .header-icon-danger:hover:not(:disabled) {
+  background-color: rgba(244, 67, 54, 0.15);
+}
+
+.dark-theme .header-icon-streaming.active:hover:not(:disabled) {
+  background-color: rgba(33, 150, 243, 0.15);
+}
+
+.dark-theme .header-icon-streaming.inactive:hover:not(:disabled) {
+  background-color: rgba(255, 255, 255, 0.1);
+}
+
+/* Dark theme adjustments for scroll button */
+.dark-theme .scroll-to-bottom-button {
+  background-color: rgba(33, 150, 243, 0.85);
+  color: #ffffff;
+  box-shadow: 0 16px 34px rgba(8, 47, 73, 0.55);
+}
+
+.dark-theme .scroll-to-bottom-button:hover {
+  box-shadow: 0 20px 40px rgba(8, 47, 73, 0.6);
+}
+
+/* Dark theme adjustments for message bubbles */
+.dark-theme .message-ai .message-bubble {
+  background-color: rgba(255, 255, 255, 0.04);
+  border-color: rgba(255, 255, 255, 0.08);
+  box-shadow: 0 12px 34px rgba(8, 47, 73, 0.55);
+}
+
+.dark-theme .message-user .message-bubble {
+  background-color: rgba(33, 150, 243, 0.2);
+  border-color: rgba(33, 150, 243, 0.35);
+  color: var(--text-color);
+}
+
+/* Dark theme adjustments for message actions */
+.dark-theme .message-action-btn {
+  background-color: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.16);
+}
+
+.dark-theme .message-action-btn:hover {
+  background-color: rgba(33, 150, 243, 0.25);
+  border-color: rgba(33, 150, 243, 0.45);
+}
+
+.dark-theme .message-edit-input {
+  background-color: var(--bg-color);
+  border-color: var(--button-primary-bg);
+}
+
+/* Dark theme adjustments for search results */
+.dark-theme .message-search-results .message-bubble {
+  background-color: rgba(33, 150, 243, 0.12);
+  border-color: rgba(33, 150, 243, 0.32);
+}
+
+.dark-theme .search-result-item {
+  background-color: var(--bg-color);
+}
+
+.dark-theme .search-toggle-btn:hover {
+  background-color: rgba(255, 255, 255, 0.1);
+}
+
+.dark-theme .scraping-summary {
+  background-color: rgba(76, 175, 80, 0.1);
+  border-color: rgba(76, 175, 80, 0.3);
+}
+
+/* Dark theme adjustments for document context */
+.dark-theme .message-document-context .message-bubble {
+  background-color: rgba(76, 175, 80, 0.12);
+  border-color: rgba(76, 175, 80, 0.3);
+}
+
+.dark-theme .document-toggle-btn:hover {
+  background-color: rgba(255, 255, 255, 0.1);
+}
+
+.dark-theme .document-content {
+  background-color: var(--bg-color);
+}
+
+/* Dark theme adjustments for conversation menu */
+.dark-theme .conversation-menu-item.datetime {
+  background-color: rgba(255, 255, 255, 0.02);
+}
+
+/* Dark theme adjustments for history items */
+.dark-theme .history-item.active {
+  background-color: rgba(33, 150, 243, 0.08);
+}
+
+/* Dark theme adjustments for markdown */
+.dark-theme .markdown-inline-code {
+  background-color: rgba(255, 255, 255, 0.08);
+  color: #f8bbd9;
+  border-color: rgba(255, 255, 255, 0.15);
+}
+
+.dark-theme .markdown-code-block {
+  background-color: rgba(255, 255, 255, 0.05);
+  border-color: rgba(255, 255, 255, 0.1);
+}
+
+.dark-theme .markdown-blockquote {
+  background-color: rgba(33, 150, 243, 0.1);
+}
+
+.dark-theme .markdown-table-header {
+  background-color: rgba(255, 255, 255, 0.05);
+}
+
+/* Dark theme adjustments for enhanced code blocks */
+.dark-theme .enhanced-code-block .code-block-header {
+  background-color: rgba(255, 255, 255, 0.05);
+}
+
+.dark-theme .code-block-content .react-syntax-highlighter {
+  background-color: rgba(255, 255, 255, 0.02) !important;
+}
+
+.dark-theme .raw-markdown-content {
+  background-color: rgba(255, 255, 255, 0.02);
+}
+
+/* Dark theme adjustments for thinking blocks */
+.dark-theme .message-body .thinking-block {
+  background-color: rgba(33, 150, 243, 0.12);
+  border-color: rgba(33, 150, 243, 0.35);
+  color: rgba(255, 255, 255, 0.8);
+}
+
+.dark-theme .message-body .thinking-block .thinking-header {
+  background-color: rgba(33, 150, 243, 0.16);
+}
