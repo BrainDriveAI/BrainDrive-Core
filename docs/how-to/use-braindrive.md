@@ -91,6 +91,11 @@ To use OpenRouter models in your BrainDrive:
 
 See [plugin developer quickstart guide here](https://docs.braindrive.ai/core/plugin-development/quickstart).
 
+## Using the Library in Chat
+
+BrainDrive can connect your chat to a local project Library for structured context and file updates.
+See the [Library guide](./use-library.md) for setup and usage.
+
 ## Building Your First Custom Page
 
 The **Page Builder** is where BrainDrive's modularity shines. Create task-specific workspaces that match your workflow.
@@ -267,4 +272,3 @@ As a BrainDrive owner you have complete control over your AI experience. No corp
 Thank you for joining us on the journey towards the future of user-owned AI.
 
 **Your AI. Your Rules.**
-

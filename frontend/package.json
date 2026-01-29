@@ -43,8 +43,10 @@
     "@typescript-eslint/eslint-plugin": "^6.0.0",
     "@typescript-eslint/parser": "^6.0.0",
     "@vitejs/plugin-react": "^5.1.2",
+    "fake-indexeddb": "^6.2.5",
     "jest": "^30.0.5",
     "jest-environment-jsdom": "^30.0.5",
+    "ts-jest": "^29.4.6",
     "typescript": "^5.0.2",
     "vite": "^7.3.0"
   }

@@ -6,7 +6,9 @@ The BrainDrive backend is a FastAPI application running on port 8005. All endpoi
 
 - [Authentication](#authentication)
 - [Settings](#settings)
+- [Filesystem (Library primitives)](#filesystem-library-primitives)
 - [Plugins](#plugins)
+- [Library Plugin (optional)](#library-plugin-optional)
 - [Pages](#pages)
 - [Plugin State](#plugin-state)
 - [Conversations & Messages](#conversations--messages)
@@ -257,6 +259,102 @@ DELETE /api/v1/settings/instances/{instance_id}
 
 ---
 
+## Filesystem (Library primitives)
+
+These endpoints provide generic, authenticated filesystem primitives scoped to `LIBRARY_PATH`.
+They accept **relative paths only** and block path traversal (`..`). Only text file types are allowed:
+`.md`, `.txt`, `.json`, `.yaml`, `.yml`.
+
+### Read File
+
+```http
+GET /api/v1/fs/read?path=projects/active/my-project/AGENT.md
+```
+
+**Response:**
+```json
+{
+  "path": "projects/active/my-project/AGENT.md",
+  "content": "# My Project",
+  "exists": true
+}
+```
+
+### Write File
+
+```http
+POST /api/v1/fs/write
+```
+
+**Request Body:**
+```json
+{
+  "path": "projects/active/my-project/notes.md",
+  "content": "Hello"
+}
+```
+
+**Response:**
+```json
+{
+  "path": "projects/active/my-project/notes.md",
+  "success": true,
+  "existed_before": false
+}
+```
+
+### Append File
+
+```http
+PATCH /api/v1/fs/append
+```
+
+**Request Body:**
+```json
+{
+  "path": "projects/active/my-project/notes.md",
+  "content": "\nMore text"
+}
+```
+
+### List Directory
+
+```http
+GET /api/v1/fs/list?path=projects/active
+```
+
+**Response:**
+```json
+{
+  "path": "projects/active",
+  "items": [
+    { "name": "my-project", "type": "directory" }
+  ]
+}
+```
+
+### Delete File (admin only)
+
+```http
+DELETE /api/v1/fs/delete?path=projects/active/my-project/notes.md
+```
+
+Deletes files only (directories are rejected). Requires admin privileges.
+
+### Library Config
+
+```http
+GET /api/v1/fs/config
+PUT /api/v1/fs/config
+POST /api/v1/fs/init
+```
+
+`GET /config` returns the current `LIBRARY_PATH` and whether it exists.  
+`PUT /config` validates a new path (it does **not** persist it).  
+`POST /init` creates the default Library structure and starter content if missing.
+
+---
+
 ## Plugins
 
 These endpoints are used to manage the plugin lifecycle. They are the backend counterpart to the actions a user takes in the Plugin Manager UI.
@@ -436,6 +534,47 @@ POST /api/v1/plugins/{plugin_slug}/services/restart
 
 ```http
 POST /api/v1/plugins/refresh-cache
+```
+
+---
+
+## Library Plugin (optional)
+
+The Library backend plugin provides structured project operations on top of the filesystem primitives.
+Routes are mounted under the plugin API prefix:
+
+```
+/api/v1/plugin-api/braindrive-library/library
+```
+
+The plugin must be installed and enabled to use these endpoints.
+
+### List Projects
+
+```http
+GET /api/v1/plugin-api/braindrive-library/library/projects?lifecycle=active
+```
+
+### Get Project Context
+
+```http
+GET /api/v1/plugin-api/braindrive-library/library/project/{slug}/context?lifecycle=active
+```
+
+Returns aggregated file content for the project (AGENT.md, spec.md, build-plan.md, decisions.md, notes.md by default).
+
+### Create Project
+
+```http
+POST /api/v1/plugin-api/braindrive-library/library/projects
+```
+
+**Request Body:**
+```json
+{
+  "name": "My Project",
+  "lifecycle": "active"
+}
 ```
 
 ---
