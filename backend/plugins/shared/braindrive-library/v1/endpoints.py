@@ -373,6 +373,96 @@ async def create_project(request: PluginRequest) -> Dict[str, Any]:
         }
 
 
+@plugin_endpoint("/append-file", methods=["POST"])
+async def append_file(request: PluginRequest) -> Dict[str, Any]:
+    """
+    Append content to a file within a project directory.
+
+    Request Body:
+        project_slug: Project slug/name
+        filename: File to append to (must have allowed extension)
+        content: Content to append
+        lifecycle: Project lifecycle (default: active)
+
+    Returns:
+        Success status and bytes written
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        return {"success": False, "error": "Invalid JSON body"}
+
+    project_slug = body.get("project_slug", "").strip()
+    filename = body.get("filename", "").strip()
+    content = body.get("content", "")
+    lifecycle = body.get("lifecycle", "active")
+
+    if not project_slug:
+        return {"success": False, "error": "project_slug is required"}
+    if not filename:
+        return {"success": False, "error": "filename is required"}
+    if not content:
+        return {"success": False, "error": "content is required"}
+
+    # Validate lifecycle
+    if lifecycle not in VALID_LIFECYCLES:
+        return {"success": False, "error": f"Invalid lifecycle '{lifecycle}'"}
+
+    # Validate extension
+    ext = Path(filename).suffix.lower()
+    if ext not in ALLOWED_EXTENSIONS:
+        return {
+            "success": False,
+            "error": f"Extension '{ext}' not allowed. Allowed: {', '.join(ALLOWED_EXTENSIONS)}",
+        }
+
+    # Validate no path traversal in slug or filename
+    if ".." in project_slug or "/" in project_slug or "\\" in project_slug:
+        return {"success": False, "error": "Invalid project_slug"}
+    if ".." in filename or "/" in filename or "\\" in filename:
+        return {"success": False, "error": "Invalid filename"}
+
+    library_path = get_library_path()
+    project_path = library_path / "projects" / lifecycle / project_slug
+
+    if not project_path.exists():
+        return {
+            "success": False,
+            "error": f"Project '{project_slug}' not found in {lifecycle}",
+        }
+
+    file_path = project_path / filename
+
+    try:
+        # Append (or create) the file
+        with open(file_path, "a", encoding="utf-8") as f:
+            f.write(content)
+
+        logger.info(
+            "Appended to file",
+            user_id=request.user_id,
+            project=project_slug,
+            filename=filename,
+            bytes_written=len(content),
+        )
+
+        return {
+            "success": True,
+            "project_slug": project_slug,
+            "filename": filename,
+            "bytes_written": len(content),
+        }
+
+    except Exception as e:
+        logger.error(
+            "Failed to append to file",
+            error=str(e),
+            project=project_slug,
+            filename=filename,
+        )
+        return {"success": False, "error": f"Failed to append to file: {str(e)}"}
+
+
 def _create_agent_content(name: str, description: str, template_path: Path) -> str:
     """Create AGENT.md content from template or default."""
     if template_path.exists():

@@ -145,3 +145,69 @@ async def test_library_plugin_create_project(db, tmp_path, monkeypatch, auth_ove
     assert (project_path / "spec.md").exists()
     assert (project_path / "build-plan.md").exists()
     assert (project_path / "decisions.md").exists()
+
+
+@pytest.mark.asyncio
+async def test_library_plugin_append_file(db, tmp_path, monkeypatch, auth_overrides):
+    library_root = tmp_path / "library"
+    project_dir = library_root / "projects" / "active" / "alpha"
+    project_dir.mkdir(parents=True)
+    (project_dir / "research-findings.md").write_text("# Findings\n", encoding="utf-8")
+
+    monkeypatch.setattr(settings, "LIBRARY_PATH", str(library_root), raising=False)
+
+    await _create_user_and_plugin(db)
+    await _load_library_routes(db)
+
+    with TestClient(app, base_url="http://test") as client:
+        response = client.post(
+            "/api/v1/plugin-api/braindrive-library/library/append-file",
+            json={
+                "project_slug": "alpha",
+                "filename": "research-findings.md",
+                "content": "\n## New finding\n",
+            },
+        )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["success"] is True
+    assert data["bytes_written"] == len("\n## New finding\n")
+
+    content = (project_dir / "research-findings.md").read_text(encoding="utf-8")
+    assert "# Findings" in content
+    assert "## New finding" in content
+
+
+@pytest.mark.asyncio
+async def test_library_plugin_append_file_validation(db, tmp_path, monkeypatch, auth_overrides):
+    library_root = tmp_path / "library"
+    project_dir = library_root / "projects" / "active" / "alpha"
+    project_dir.mkdir(parents=True)
+
+    monkeypatch.setattr(settings, "LIBRARY_PATH", str(library_root), raising=False)
+
+    await _create_user_and_plugin(db)
+    await _load_library_routes(db)
+
+    with TestClient(app, base_url="http://test") as client:
+        # Path traversal in slug
+        r = client.post(
+            "/api/v1/plugin-api/braindrive-library/library/append-file",
+            json={"project_slug": "../etc", "filename": "notes.md", "content": "x"},
+        )
+        assert r.json()["success"] is False
+
+        # Disallowed extension
+        r = client.post(
+            "/api/v1/plugin-api/braindrive-library/library/append-file",
+            json={"project_slug": "alpha", "filename": "script.py", "content": "x"},
+        )
+        assert r.json()["success"] is False
+
+        # Missing project
+        r = client.post(
+            "/api/v1/plugin-api/braindrive-library/library/append-file",
+            json={"project_slug": "nonexistent", "filename": "notes.md", "content": "x"},
+        )
+        assert r.json()["success"] is False
