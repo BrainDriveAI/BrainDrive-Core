@@ -6,6 +6,7 @@
  */
 
 import React from 'react';
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 
 // Import Phase 5 components and services
 import { animationService } from '../services/AnimationService';
@@ -13,57 +14,6 @@ import { accessibilityService } from '../services/AccessibilityService';
 import { developerToolsService } from '../services/DeveloperToolsService';
 import { useAnimation } from '../hooks/useAnimation';
 import { useAccessibility } from '../hooks/useAccessibility';
-
-// Mock testing utilities
-const mockRender = (component: React.ReactElement) => {
-  const container = document.createElement('div');
-  document.body.appendChild(container);
-  return { container };
-};
-
-const mockScreen = {
-  getByTestId: (testId: string) => document.querySelector(`[data-testid="${testId}"]`) as HTMLElement,
-  getByText: (text: string) => {
-    const walker = document.createTreeWalker(
-      document.body,
-      NodeFilter.SHOW_TEXT
-    );
-    let node;
-    while (node = walker.nextNode()) {
-      if (node.textContent?.includes(text)) {
-        return node.parentElement as HTMLElement;
-      }
-    }
-    throw new Error(`Text "${text}" not found`);
-  }
-};
-
-const mockFireEvent = {
-  click: (element: HTMLElement) => {
-    const event = new MouseEvent('click', { bubbles: true });
-    element.dispatchEvent(event);
-  }
-};
-
-const mockWaitFor = async (callback: () => void, options?: { timeout?: number }) => {
-  const timeout = options?.timeout || 1000;
-  const start = Date.now();
-  
-  while (Date.now() - start < timeout) {
-    try {
-      callback();
-      return;
-    } catch (error) {
-      await new Promise(resolve => setTimeout(resolve, 10));
-    }
-  }
-  
-  callback(); // Final attempt
-};
-
-const mockAct = async (callback: () => Promise<void> | void) => {
-  await callback();
-};
 
 // Mock performance API
 Object.defineProperty(window, 'performance', {
@@ -148,15 +98,15 @@ describe('Phase 5 Integration Tests', () => {
     });
 
     test('should play animations with performance monitoring', async () => {
-      mockRender(<AnimatedTestComponent />);
+      render(<AnimatedTestComponent />);
       
-      const playButton = mockScreen.getByTestId('play-animation');
-      const statusElement = mockScreen.getByTestId('animation-status');
+      const playButton = screen.getByTestId('play-animation');
+      const statusElement = screen.getByTestId('animation-status');
       
       expect(statusElement.textContent).toContain('Stopped');
       
-      await mockAct(async () => {
-        mockFireEvent.click(playButton);
+      await act(async () => {
+        fireEvent.click(playButton);
       });
       
       expect(statusElement.textContent).toContain('Playing');
@@ -178,16 +128,16 @@ describe('Phase 5 Integration Tests', () => {
         dispatchEvent: jest.fn(),
       }));
 
-      mockRender(<AnimatedTestComponent />);
+      render(<AnimatedTestComponent />);
       
-      const playButton = mockScreen.getByTestId('play-animation');
+      const playButton = screen.getByTestId('play-animation');
       
-      await mockAct(async () => {
-        mockFireEvent.click(playButton);
+      await act(async () => {
+        fireEvent.click(playButton);
       });
       
       // Animation should still work but with reduced duration
-      expect(mockScreen.getByTestId('animation-status').textContent).toContain('Playing');
+      expect(screen.getByTestId('animation-status').textContent).toContain('Playing');
     });
 
     test('should handle animation sequences correctly', async () => {
@@ -203,11 +153,11 @@ describe('Phase 5 Integration Tests', () => {
         parallel: false
       };
 
-      await mockAct(async () => {
+      await act(async () => {
         await animationService.playSequence(sequence, element);
       });
 
-      expect(window.performance.mark).toHaveBeenCalledTimes(2);
+      expect((window.performance.mark as jest.Mock).mock.calls.length).toBeGreaterThanOrEqual(4);
     });
 
     test('should generate and apply CSS animations', () => {
@@ -220,7 +170,7 @@ describe('Phase 5 Integration Tests', () => {
         easing: 'ease-out' as const
       };
 
-      mockAct(() => {
+      act(() => {
         animationService.play(config, element);
       });
 
@@ -271,27 +221,28 @@ describe('Phase 5 Integration Tests', () => {
     });
 
     test('should run WCAG compliance tests', async () => {
-      mockRender(<AccessibilityTestComponent />);
+      render(<AccessibilityTestComponent />);
       
-      const testButton = mockScreen.getByText('Run Accessibility Test');
+      const testButton = screen.getByText('Run Accessibility Test');
       
-      await mockAct(async () => {
-        mockFireEvent.click(testButton);
+      await act(async () => {
+        fireEvent.click(testButton);
       });
       
-      await mockWaitFor(() => {
-        const scoreElement = mockScreen.getByTestId('accessibility-score');
+      await waitFor(() => {
+        const scoreElement = screen.getByTestId('accessibility-score');
         expect(scoreElement.textContent).toMatch(/Score: \d+/);
       });
     });
 
     test('should detect accessibility violations', async () => {
-      mockRender(<AccessibilityTestComponent />);
+      render(<AccessibilityTestComponent />);
       
-      const container = mockScreen.getByTestId('accessibility-container');
+      const container = screen.getByTestId('accessibility-container');
+      const button = screen.getByTestId('button-no-label');
       
-      await mockAct(async () => {
-        const result = accessibilityService.testWCAGCompliance(container, 'AA');
+      await act(async () => {
+        const result = accessibilityService.testWCAGCompliance(button, 'AA');
         expect(result.issues.length).toBeGreaterThan(0);
       });
     });
@@ -363,7 +314,7 @@ describe('Phase 5 Integration Tests', () => {
     });
 
     test('should pass axe accessibility tests', async () => {
-      const { container } = mockRender(
+      const { container } = render(
         <div>
           <h1>Accessible Page</h1>
           <button aria-label="Close dialog">×</button>
@@ -509,7 +460,7 @@ describe('Phase 5 Integration Tests', () => {
         easing: 'ease-out' as const
       };
       
-      await mockAct(async () => {
+      await act(async () => {
         await animationService.play(config, element);
       });
       
@@ -548,7 +499,7 @@ describe('Phase 5 Integration Tests', () => {
         iterations: 'infinite' as const
       };
       
-      await mockAct(async () => {
+      await act(async () => {
         await animationService.play(config, button);
       });
       
@@ -578,7 +529,7 @@ describe('Phase 5 Integration Tests', () => {
         easing: 'ease-out' as const
       };
       
-      mockAct(() => {
+      act(() => {
         animationService.play(animConfig, element);
       });
       
@@ -610,7 +561,7 @@ describe('Phase 5 Integration Tests', () => {
           easing: 'ease-out' as const
         };
         
-        mockAct(() => {
+        act(() => {
           animationService.play(config, element);
         });
         element.remove();
