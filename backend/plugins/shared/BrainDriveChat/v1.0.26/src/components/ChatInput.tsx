@@ -208,20 +208,14 @@ class ChatInput extends React.Component<ChatInputProps, ChatInputState> {
   handleLibrarySelectAll = () => {
     this.closeAllMenus();
     if (this.props.onLibrarySelectProject) {
-      this.props.onLibrarySelectProject(null); // null = "All"
-    }
-    if (this.props.onLibraryToggle && !this.props.libraryScope?.enabled) {
-      this.props.onLibraryToggle();
+      this.props.onLibrarySelectProject(null); // null = "All", also sets enabled: true
     }
   };
 
   handleLibrarySelectProject = (project: LibraryProject) => {
     this.closeAllMenus();
     if (this.props.onLibrarySelectProject) {
-      this.props.onLibrarySelectProject(project);
-    }
-    if (this.props.onLibraryToggle && !this.props.libraryScope?.enabled) {
-      this.props.onLibraryToggle();
+      this.props.onLibrarySelectProject(project); // also sets enabled: true
     }
   };
 
