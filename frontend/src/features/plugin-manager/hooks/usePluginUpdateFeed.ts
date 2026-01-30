@@ -343,6 +343,7 @@ export const usePluginUpdateFeed = (): UsePluginUpdateFeedResult => {
   }, [cacheKey, persistCache]);
 
   const refresh = useCallback(async () => {
+    dismissedRef.current = [];
     setDismissedIds([]);
     persistCache({ dismissed: [] });
     await fetchUpdates(true);
@@ -492,7 +493,6 @@ export const usePluginUpdateFeed = (): UsePluginUpdateFeedResult => {
 };
 
 export default usePluginUpdateFeed;
-
 
 
 

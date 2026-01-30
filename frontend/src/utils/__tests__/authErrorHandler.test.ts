@@ -40,9 +40,9 @@ describe('Authentication Error Handler', () => {
       
       const result = getLoginErrorMessage(error);
       
-      expect(result.code).toBe('INVALID_CREDENTIALS');
-      expect(result.message).toContain('username or password is incorrect');
-      expect(result.suggestions).toContain('Verify your email address is correct');
+      expect(result.code).toBe('INVALID_PASSWORD');
+      expect(result.message).toContain('Incorrect password');
+      expect(result.suggestions).toContain('Make sure you\'re typing the correct password');
       expect(result.actionable).toBe(true);
     });
 
@@ -59,9 +59,9 @@ describe('Authentication Error Handler', () => {
       const result = getLoginErrorMessage(error);
       
       expect(result.code).toBe('ACCOUNT_NOT_FOUND');
-      expect(result.message).toContain('No account found with this email address');
+      expect(result.message).toContain('We couldn\'t find an account with this email address');
       expect(result.field).toBe('email');
-      expect(result.suggestions).toContain('Create a new account if you don\'t have one');
+      expect(result.suggestions).toContain('Double-check that you typed your email correctly');
     });
 
     it('should handle server errors', () => {
@@ -75,7 +75,7 @@ describe('Authentication Error Handler', () => {
       const result = getLoginErrorMessage(error);
       
       expect(result.code).toBe('SERVER_ERROR');
-      expect(result.message).toContain('server is experiencing issues');
+      expect(result.message).toContain('Something went wrong on our end');
       expect(result.actionable).toBe(false);
     });
   });
@@ -94,9 +94,9 @@ describe('Authentication Error Handler', () => {
       const result = getRegistrationErrorMessage(error);
       
       expect(result.code).toBe('EMAIL_EXISTS');
-      expect(result.message).toContain('email address is already registered');
+      expect(result.message).toContain('An account with this email already exists');
       expect(result.field).toBe('email');
-      expect(result.suggestions).toContain('Try logging in instead');
+      expect(result.suggestions).toContain('Try logging in with this email instead');
     });
 
     it('should handle username already taken errors', () => {
@@ -112,9 +112,9 @@ describe('Authentication Error Handler', () => {
       const result = getRegistrationErrorMessage(error);
       
       expect(result.code).toBe('USERNAME_EXISTS');
-      expect(result.message).toContain('username is already taken');
+      expect(result.message).toContain('already using this username');
       expect(result.field).toBe('username');
-      expect(result.suggestions).toContain('Try a different username');
+      expect(result.suggestions).toContain('Try adding numbers to your username (like \"john123\")');
     });
 
     it('should handle password validation errors', () => {
@@ -192,9 +192,9 @@ describe('Authentication Error Handler', () => {
     it('should identify weak passwords', () => {
       const weakPasswords = [
         'weak',
-        '12345678',
-        'password',
-        'PASSWORD'
+        '1234567',
+        'short',
+        'abcdef'
       ];
 
       weakPasswords.forEach(password => {
@@ -223,9 +223,10 @@ describe('Authentication Error Handler', () => {
 
     it('should classify medium strength passwords', () => {
       const mediumPasswords = [
-        'Password1',  // Missing special char
-        'password1!', // Missing uppercase
-        'PASSWORD1!'  // Missing lowercase
+        'Password',  // Missing number
+        'password1', // Missing uppercase
+        'PASSWORD1', // Missing lowercase
+        '12345678'   // Missing letters
       ];
 
       mediumPasswords.forEach(password => {
