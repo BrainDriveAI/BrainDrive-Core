@@ -1,11 +1,19 @@
-from sqlalchemy import Column, String, Integer, Boolean, ForeignKey, Text, JSON, UniqueConstraint, TIMESTAMP, DateTime
+from sqlalchemy import Column, String, Integer, Boolean, ForeignKey, Text, JSON, UniqueConstraint, TIMESTAMP, DateTime, Enum
 import sqlalchemy
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from datetime import datetime, UTC
 import json
+import enum
 
 from app.models.base import Base
+
+
+class PluginType(str, enum.Enum):
+    """Enum for plugin types (frontend, backend, fullstack)."""
+    FRONTEND = "frontend"
+    BACKEND = "backend"
+    FULLSTACK = "fullstack"
 
 
 class Plugin(Base):
@@ -42,6 +50,12 @@ class Plugin(Base):
     latest_version = Column(String(50), nullable=True)  # Latest available version (cached)
     installation_type = Column(String(20), default='local')  # Installation type: local or remote
     permissions = Column(Text, nullable=True)  # JSON array of required permissions
+
+    # Backend plugin fields
+    plugin_type = Column(String(20), default="frontend")  # frontend, backend, fullstack
+    endpoints_file = Column(String, nullable=True)  # e.g., "endpoints.py"
+    route_prefix = Column(String, nullable=True)  # e.g., "/library"
+    backend_dependencies = Column(Text, nullable=True)  # JSON list of plugin slugs
 
     # JSON fields
     config_fields = Column(Text)  # Stored as JSON string
@@ -100,8 +114,12 @@ class Plugin(Base):
             "updateAvailable": self.update_available,
             "latestVersion": self.latest_version,
             "installationType": self.installation_type,
+            # Backend plugin fields
+            "pluginType": self.plugin_type,
+            "endpointsFile": self.endpoints_file,
+            "routePrefix": self.route_prefix,
         }
-        
+
         # Deserialize JSON fields
         if self.config_fields:
             result["configFields"] = json.loads(self.config_fields)
@@ -128,6 +146,11 @@ class Plugin(Base):
         else:
             result["requiredServicesRuntime"] = []
 
+        if self.backend_dependencies:
+            result["backendDependencies"] = json.loads(self.backend_dependencies)
+        else:
+            result["backendDependencies"] = []
+
         return result
     
     @classmethod
@@ -152,6 +175,11 @@ class Plugin(Base):
             "updateAvailable": "update_available",
             "latestVersion": "latest_version",
             "installationType": "installation_type",
+            # Backend plugin fields
+            "pluginType": "plugin_type",
+            "endpointsFile": "endpoints_file",
+            "routePrefix": "route_prefix",
+            "backendDependencies": "backend_dependencies",
         }
         
         # Create a new dictionary with snake_case keys
@@ -163,8 +191,8 @@ class Plugin(Base):
                 # Convert camelCase to snake_case
                 db_key = ''.join(['_' + c.lower() if c.isupper() else c for c in key]).lstrip('_')
             
-            # Handle special fields
-            if db_key in ["config_fields", "messages", "dependencies", "permissions"] and value is not None:
+            # Handle special fields (JSON serialization)
+            if db_key in ["config_fields", "messages", "dependencies", "permissions", "backend_dependencies"] and value is not None:
                 db_data[db_key] = json.dumps(value)
             else:
                 db_data[db_key] = value

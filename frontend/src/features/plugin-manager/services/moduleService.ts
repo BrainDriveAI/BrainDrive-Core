@@ -1,4 +1,4 @@
-import { Module, Plugin } from '../types';
+import { Module, Plugin, PluginType, DependentPlugin } from '../types';
 import ApiService from '../../../services/ApiService';
 import { AvailableUpdatesResponse, PluginUpdateInfo } from '../../plugin-installer/types';
 
@@ -32,28 +32,33 @@ export class ModuleService {
     search?: string;
     category?: string | null;
     tags?: string[];
+    pluginType?: PluginType | null;
     page?: number;
     pageSize?: number;
   }): Promise<{ modules: Module[]; totalItems: number }> {
-    const { search, category, tags, page = 1, pageSize = 16 } = options;
-    
+    const { search, category, tags, pluginType, page = 1, pageSize = 16 } = options;
+
     const params: Record<string, any> = {
       page,
       pageSize
     };
-    
+
     if (search) {
       params.search = search;
     }
-    
+
     if (category) {
       params.category = category;
     }
-    
+
     if (tags && tags.length > 0) {
       params.tags = tags.join(',');
     }
-    
+
+    if (pluginType) {
+      params.plugin_type = pluginType;
+    }
+
     try {
       const response = await this.apiService.get(`${this.basePath}/manager`, { params });
       return {
@@ -224,6 +229,54 @@ export class ModuleService {
     } catch (error) {
       console.error('Failed to fetch tags:', error);
       // Return empty array on error
+      return [];
+    }
+  }
+
+  /**
+   * Get plugins that depend on a backend plugin
+   * Used to show dependency relationships and cascade disable warnings
+   */
+  async getDependentPlugins(pluginSlug: string): Promise<DependentPlugin[]> {
+    try {
+      const response = await this.apiService.get(`${this.basePath}/${pluginSlug}/dependents`);
+      return response.dependents || [];
+    } catch (error) {
+      console.error(`Failed to fetch dependent plugins for ${pluginSlug}:`, error);
+      return [];
+    }
+  }
+
+  /**
+   * Disable a backend plugin with cascade disable of dependent frontend plugins
+   * Returns the list of plugins that were cascade-disabled
+   */
+  async disablePluginWithCascade(pluginId: string): Promise<{
+    cascadeDisabled: DependentPlugin[];
+  }> {
+    try {
+      const pluginSlug = this.extractPluginSlugFromId(pluginId);
+      const response = await this.apiService.post(`${this.basePath}/${pluginSlug}/disable-cascade`);
+      return {
+        cascadeDisabled: response.cascade_disabled || []
+      };
+    } catch (error) {
+      console.error(`Failed to cascade disable plugin ${pluginId}:`, error);
+      throw error;
+    }
+  }
+
+  /**
+   * Check if disabling a plugin would affect dependent plugins
+   * Returns the list of plugins that would be cascade-disabled
+   */
+  async checkCascadeDisable(pluginId: string): Promise<DependentPlugin[]> {
+    try {
+      const pluginSlug = this.extractPluginSlugFromId(pluginId);
+      const response = await this.apiService.get(`${this.basePath}/${pluginSlug}/cascade-preview`);
+      return response.would_disable || [];
+    } catch (error) {
+      console.error(`Failed to check cascade disable for ${pluginId}:`, error);
       return [];
     }
   }

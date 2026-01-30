@@ -31,6 +31,7 @@ from app.models import UserRole
 from app.core.database import db_factory, get_db
 from app.core.job_manager_provider import initialize_job_manager, shutdown_job_manager
 from app.plugins.service_installler.start_stop_plugin_services import start_plugin_services_from_settings_on_startup, stop_all_plugin_services_on_shutdown
+from app.plugins.route_loader import get_plugin_loader
 from app.middleware.request_size import RequestSizeMiddleware
 from app.middleware.request_id import RequestIdMiddleware
 
@@ -162,6 +163,19 @@ async def lifespan(app: FastAPI):
             await initialize_job_manager()
             # Start plugin services
             await start_plugin_services_from_settings_on_startup()
+
+            # Initialize backend plugin routes
+            logger.info("Initializing backend plugin routes...")
+            try:
+                loader = get_plugin_loader()
+                loader.set_app(app)
+                result = await loader.reload_routes(session)
+                if result.errors:
+                    logger.warning(f"Backend plugin routes loaded with {len(result.errors)} errors")
+                else:
+                    logger.info(f"Backend plugin routes initialized: {result.loaded} ({result.total_routes} routes)")
+            except Exception as route_err:
+                logger.error(f"Failed to initialize backend plugin routes: {route_err}")
 
         yield
     except Exception as e:

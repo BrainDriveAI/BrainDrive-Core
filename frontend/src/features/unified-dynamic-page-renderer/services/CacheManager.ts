@@ -230,7 +230,7 @@ export class CacheManager implements ICacheService {
       const localStorageKeys = this.getLocalStorageKeys();
       for (const key of localStorageKeys) {
         if (regex.test(key)) {
-          await this.deleteFromLocalStorage(key);
+          await this.deleteFromLocalStorage(key.replace('cache_', ''));
         }
       }
 

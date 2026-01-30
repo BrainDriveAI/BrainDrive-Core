@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Box,
   Typography,
@@ -12,15 +12,25 @@ import {
   DialogContentText,
   DialogActions,
   CircularProgress,
-  Alert
+  Alert,
+  List,
+  ListItem,
+  ListItemIcon,
+  ListItemText
 } from '@mui/material';
+import PowerOffIcon from '@mui/icons-material/PowerOff';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import UpdateIcon from '@mui/icons-material/Update';
 import DeleteIcon from '@mui/icons-material/Delete';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
-import { Module, Plugin } from '../types';
+import StorageIcon from '@mui/icons-material/Storage';
+import WebIcon from '@mui/icons-material/Web';
+import WarningIcon from '@mui/icons-material/Warning';
+import LinkIcon from '@mui/icons-material/Link';
+import { Module, Plugin, DependentPlugin } from '../types';
 import ModuleStatusToggle from './ModuleStatusToggle';
 import { pluginInstallerService } from '../../plugin-installer/services';
+import moduleService from '../services/moduleService';
 import { PluginTestState } from '../../plugin-installer/types';
 import PluginTestResults from '../../plugin-installer/components/PluginTestResults';
 
@@ -46,8 +56,11 @@ export const ModuleDetailHeader: React.FC<ModuleDetailHeaderProps> = ({
 }) => {
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [updateDialogOpen, setUpdateDialogOpen] = useState(false);
+  const [cascadeDisableDialogOpen, setCascadeDisableDialogOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [dependentPlugins, setDependentPlugins] = useState<DependentPlugin[]>([]);
+  const [cascadeDisableTargets, setCascadeDisableTargets] = useState<DependentPlugin[]>([]);
 
   // Plugin test state
   const [testState, setTestState] = useState<PluginTestState>({
@@ -55,6 +68,21 @@ export const ModuleDetailHeader: React.FC<ModuleDetailHeaderProps> = ({
     result: null,
     hasRun: false
   });
+
+  // Fetch dependent plugins for backend/fullstack plugins
+  useEffect(() => {
+    const fetchDependents = async () => {
+      if (plugin.pluginType === 'backend' || plugin.pluginType === 'fullstack') {
+        try {
+          const dependents = await moduleService.getDependentPlugins(plugin.name);
+          setDependentPlugins(dependents);
+        } catch (err) {
+          console.error('Failed to fetch dependent plugins:', err);
+        }
+      }
+    };
+    fetchDependents();
+  }, [plugin.name, plugin.pluginType]);
 
   const handleUpdate = async () => {
     if (!onUpdate) return;
@@ -141,6 +169,44 @@ export const ModuleDetailHeader: React.FC<ModuleDetailHeaderProps> = ({
 
   const canUpdate = plugin.sourceUrl && plugin.updateAvailable;
   const canDelete = plugin.sourceUrl;
+  const isBackendPlugin = plugin.pluginType === 'backend' || plugin.pluginType === 'fullstack';
+  const hasEnabledDependents = dependentPlugins.some(dep => dep.enabled);
+
+  // Intercept toggle status to show cascade disable warning for backend plugins
+  const handleToggleStatusWithCascade = async (enabled: boolean) => {
+    // If enabling, no cascade check needed
+    if (enabled) {
+      await onToggleStatus(enabled);
+      return;
+    }
+
+    // If disabling a backend plugin with enabled dependents, show warning
+    if (isBackendPlugin && hasEnabledDependents) {
+      setCascadeDisableTargets(dependentPlugins.filter(dep => dep.enabled));
+      setCascadeDisableDialogOpen(true);
+      return;
+    }
+
+    // Otherwise, proceed normally
+    await onToggleStatus(enabled);
+  };
+
+  // Handle confirmed cascade disable
+  const handleConfirmCascadeDisable = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      // Use the cascade disable endpoint
+      await moduleService.disablePluginWithCascade(plugin.id);
+      setCascadeDisableDialogOpen(false);
+      // Refresh the page to show updated states
+      window.location.reload();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to disable plugin');
+    } finally {
+      setLoading(false);
+    }
+  };
 
   return (
     <Paper sx={{ p: 3, mb: 3 }}>
@@ -197,34 +263,110 @@ export const ModuleDetailHeader: React.FC<ModuleDetailHeaderProps> = ({
             moduleId={module.id}
             pluginId={module.pluginId}
             enabled={module.enabled}
-            onChange={onToggleStatus}
+            onChange={handleToggleStatusWithCascade}
           />
         </Box>
       </Box>
       
       <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, mb: 3 }}>
-        <Typography variant="body1">
-          <strong>Plugin:</strong> {plugin.name} (v{plugin.version})
-        </Typography>
-        
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+          <Typography variant="body1">
+            <strong>Plugin:</strong> {plugin.name} (v{plugin.version})
+          </Typography>
+          {plugin.pluginType === 'backend' && (
+            <Chip
+              icon={<StorageIcon sx={{ fontSize: 16 }} />}
+              label="Backend Plugin"
+              size="small"
+              color="secondary"
+            />
+          )}
+          {plugin.pluginType === 'fullstack' && (
+            <Chip
+              icon={<WebIcon sx={{ fontSize: 16 }} />}
+              label="Fullstack Plugin"
+              size="small"
+              color="info"
+            />
+          )}
+          {dependentPlugins.length > 0 && (
+            <Chip
+              icon={<WarningIcon sx={{ fontSize: 16 }} />}
+              label={`${dependentPlugins.length} dependent${dependentPlugins.length > 1 ? 's' : ''}`}
+              size="small"
+              color="warning"
+            />
+          )}
+        </Box>
+
         {module.author && (
           <Typography variant="body1">
             <strong>Author:</strong> {module.author}
           </Typography>
         )}
-        
+
         {module.category && (
           <Typography variant="body1">
             <strong>Category:</strong> {module.category}
           </Typography>
         )}
-        
+
         {module.lastUpdated && (
           <Typography variant="body1">
             <strong>Updated:</strong> {new Date(module.lastUpdated).toLocaleDateString()}
           </Typography>
         )}
+
+        {/* Backend Dependencies */}
+        {plugin.backendDependencies && plugin.backendDependencies.length > 0 && (
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+            <Typography variant="body1">
+              <strong>Requires:</strong>
+            </Typography>
+            {plugin.backendDependencies.map((dep) => (
+              <Chip
+                key={dep}
+                icon={<LinkIcon sx={{ fontSize: 14 }} />}
+                label={dep}
+                size="small"
+                variant="outlined"
+              />
+            ))}
+          </Box>
+        )}
       </Box>
+
+      {/* Dependent Plugins Section for Backend Plugins */}
+      {(plugin.pluginType === 'backend' || plugin.pluginType === 'fullstack') && dependentPlugins.length > 0 && (
+        <>
+          <Divider sx={{ my: 2 }} />
+          <Typography variant="h6" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+            <WarningIcon color="warning" />
+            Required by {dependentPlugins.length} Plugin{dependentPlugins.length > 1 ? 's' : ''}
+          </Typography>
+          <Alert severity="warning" sx={{ mb: 2 }}>
+            Disabling this backend plugin will also disable the following dependent plugins.
+          </Alert>
+          <List dense>
+            {dependentPlugins.map((dep) => (
+              <ListItem key={dep.id}>
+                <ListItemIcon>
+                  <WebIcon color={dep.enabled ? 'primary' : 'disabled'} />
+                </ListItemIcon>
+                <ListItemText
+                  primary={dep.name}
+                  secondary={dep.enabled ? 'Currently enabled' : 'Currently disabled'}
+                />
+                <Chip
+                  label={dep.enabled ? 'Enabled' : 'Disabled'}
+                  size="small"
+                  color={dep.enabled ? 'success' : 'default'}
+                />
+              </ListItem>
+            ))}
+          </List>
+        </>
+      )}
       
       {module.description && (
         <>
@@ -311,6 +453,51 @@ export const ModuleDetailHeader: React.FC<ModuleDetailHeaderProps> = ({
             startIcon={loading ? <CircularProgress size={20} /> : <DeleteIcon />}
           >
             {loading ? 'Deleting...' : 'Delete'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Cascade Disable Confirmation Dialog */}
+      <Dialog open={cascadeDisableDialogOpen} onClose={() => setCascadeDisableDialogOpen(false)} maxWidth="sm" fullWidth>
+        <DialogTitle sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+          <WarningIcon color="warning" />
+          Disable Backend Plugin
+        </DialogTitle>
+        <DialogContent>
+          <DialogContentText>
+            Disabling "{plugin.name}" will also disable the following dependent plugins:
+          </DialogContentText>
+          <List dense sx={{ mt: 2, bgcolor: 'background.paper', borderRadius: 1 }}>
+            {cascadeDisableTargets.map((dep) => (
+              <ListItem key={dep.id}>
+                <ListItemIcon>
+                  <WebIcon color="primary" />
+                </ListItemIcon>
+                <ListItemText primary={dep.name} />
+              </ListItem>
+            ))}
+          </List>
+          <Alert severity="warning" sx={{ mt: 2 }}>
+            These plugins require "{plugin.name}" to function. They will be automatically disabled.
+          </Alert>
+          {error && (
+            <Alert severity="error" sx={{ mt: 2 }}>
+              {error}
+            </Alert>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setCascadeDisableDialogOpen(false)} disabled={loading}>
+            Cancel
+          </Button>
+          <Button
+            onClick={handleConfirmCascadeDisable}
+            variant="contained"
+            color="warning"
+            disabled={loading}
+            startIcon={loading ? <CircularProgress size={20} /> : <WarningIcon />}
+          >
+            {loading ? 'Disabling...' : `Disable ${cascadeDisableTargets.length + 1} Plugins`}
           </Button>
         </DialogActions>
       </Dialog>

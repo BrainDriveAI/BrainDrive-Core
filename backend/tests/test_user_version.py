@@ -15,8 +15,8 @@ async def test_registration_sets_version(client: TestClient, db: AsyncSession):
     )
     assert response.status_code == 200
     data = response.json()
-    assert data["version"] == "0.4.1"
+    assert data["version"] == "0.6.0"
 
     user = await User.get_by_email(db, "versiontest@example.com")
     assert user is not None
-    assert user.version == "0.4.1"
+    assert user.version == "0.6.0"

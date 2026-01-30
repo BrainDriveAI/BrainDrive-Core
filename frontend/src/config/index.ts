@@ -16,7 +16,7 @@ const envSchema = z.object({
 		.string()
 		.transform((val) => val !== "false")
 		.default("true"), // Default to using proxy in development
-	MODE: z.enum(["development", "production"]).default("development"),
+	MODE: z.enum(["development", "production", "test"]).default("development"),
 	VITE_PLUGIN_STUDIO_DEV_MODE: z
 		.string()
 		.transform((val) => val === "true")
@@ -46,12 +46,12 @@ const getApiBaseUrl = () => {
 	}
 
 	// In development with proxy enabled, use relative URLs
-	if (env.MODE === "development" && env.VITE_USE_PROXY) {
+	if ((env.MODE === "development" || env.MODE === "test") && env.VITE_USE_PROXY) {
 		return ""; // Relative URLs will be proxied by Vite
 	}
 
 	// In development without proxy, direct connection to backend
-	if (env.MODE === "development") {
+	if (env.MODE === "development" || env.MODE === "test") {
 		return "http://127.0.0.1:8005"; // Direct connection to backend
 	}
 
@@ -75,7 +75,7 @@ export const config = {
 		},
 	},
 	env: {
-		isDevelopment: env.MODE === "development",
+		isDevelopment: env.MODE === "development" || env.MODE === "test",
 		isProduction: env.MODE === "production",
 	},
 	devMode: {

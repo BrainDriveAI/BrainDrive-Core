@@ -1,0 +1,28 @@
+/* 
+ * BrainDriveChat - Modular CSS Architecture
+ * Import all modular CSS files for better organization and maintainability
+ */
+
+/* Base styles: variables, reset, utilities */
+@import './styles/BrainDriveChat.base.css';
+
+/* Layout: main container, flexbox, grid layouts */
+@import './styles/BrainDriveChat.layout.css';
+
+/* Components: headers, buttons, menus, etc. */
+@import './styles/BrainDriveChat.components.css';
+
+/* Messages: chat messages, search results, document context */
+@import './styles/BrainDriveChat.messages.css';
+
+/* Forms: inputs, buttons, modals, file uploads */
+@import './styles/BrainDriveChat.forms.css';
+
+/* Markdown: code blocks, syntax highlighting, text formatting */
+@import './styles/BrainDriveChat.markdown.css';
+
+/* Themes: dark mode and theme-specific overrides */
+@import './styles/BrainDriveChat.themes.css';
+
+/* Responsive: media queries for different screen sizes */
+@import './styles/BrainDriveChat.responsive.css';

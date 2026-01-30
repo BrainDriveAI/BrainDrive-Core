@@ -19,7 +19,9 @@ import {
   Extension as ExtensionIcon,
   GitHub as GitHubIcon,
   Refresh as RefreshIcon,
-  PlayArrow as PlayArrowIcon
+  PlayArrow as PlayArrowIcon,
+  Storage as StorageIcon,
+  Warning as WarningIcon
 } from '@mui/icons-material';
 import { PluginInstallResponse, PluginTestState } from '../types';
 import PluginTestResults from './PluginTestResults';
@@ -179,6 +181,22 @@ const InstallationResult: React.FC<InstallationResultProps> = ({
               size="small"
               color="primary"
             />
+            {result.data?.plugin_type === 'backend' && (
+              <Chip
+                icon={<StorageIcon sx={{ fontSize: 16 }} />}
+                label="Backend Plugin"
+                size="small"
+                color="secondary"
+              />
+            )}
+            {result.data?.plugin_type === 'fullstack' && (
+              <Chip
+                icon={<StorageIcon sx={{ fontSize: 16 }} />}
+                label="Fullstack Plugin"
+                size="small"
+                color="info"
+              />
+            )}
           </Box>
 
           <Alert severity="info" sx={{ mb: 2 }}>
@@ -186,6 +204,25 @@ const InstallationResult: React.FC<InstallationResultProps> = ({
               This plugin has been installed for your account only. Other users will not see or have access to this plugin unless they install it themselves.
             </Typography>
           </Alert>
+
+          {/* Backend Plugin Warning - shown when plugin_type is backend or fullstack */}
+          {(result.data?.plugin_type === 'backend' || result.data?.plugin_type === 'fullstack') && (
+            <Alert
+              severity="warning"
+              icon={<StorageIcon />}
+              sx={{ mb: 2 }}
+            >
+              <Typography variant="body2" fontWeight="medium" sx={{ mb: 1 }}>
+                <WarningIcon sx={{ fontSize: 16, verticalAlign: 'middle', mr: 0.5 }} />
+                Backend Plugin Installed
+              </Typography>
+              <Typography variant="body2">
+                This is a {result.data.plugin_type} plugin that executes server-side code.
+                Backend plugins can access server resources, databases, and APIs.
+                Only enable backend plugins from trusted sources.
+              </Typography>
+            </Alert>
+          )}
 
           {/* Plugin Loading Test Section */}
           <Divider sx={{ my: 2 }} />
