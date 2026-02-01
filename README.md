@@ -1,19 +1,15 @@
 
-<table align="center" border="0" cellpadding="0" cellspacing="0"><tr>
-  <td align="center" valign="middle">
-    <picture>
-      <source media="(prefers-color-scheme: dark)" srcset="./images/logo-dark-mode.png">
-      <source media="(prefers-color-scheme: light)" srcset="./images/logo-light-mode.png">
-      <img src="./images/logo-light-mode.png" alt="BrainDrive Logo" width="300">
-    </picture>
-    <br>
-    <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT%20License-green.svg" alt="License"></a>
-  </td>
-  <td width="20"></td>
-  <td valign="middle">
-    <img src="./images/localllm-2nd-place-badge.png" alt="r/LocalLLM 30-Day Innovation Contest 2025 — 2nd Place" width="173">
-  </td>
-</tr></table>
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="./images/logo-dark-mode.png">
+    <source media="(prefers-color-scheme: light)" srcset="./images/logo-light-mode.png">
+    <img src="./images/logo-light-mode.png" alt="BrainDrive Logo" width="300" style="vertical-align: middle;">
+  </picture>
+  &nbsp;&nbsp;&nbsp;
+  <img src="./images/localllm-2nd-place-badge.png" alt="r/LocalLLM 30-Day Innovation Contest 2025 — 2nd Place" width="173" style="vertical-align: middle;">
+  <br>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT%20License-green.svg" alt="License"></a>
+</p>
 
 BrainDrive is the open source ChatGPT alternative you fully own and control. Use, customize, and monetize your BrainDrive however you want. No Big Tech overlords. Just your AI. Your rules.
 
