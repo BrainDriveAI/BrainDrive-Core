@@ -3,10 +3,10 @@
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="./images/logo-dark-mode.png">
     <source media="(prefers-color-scheme: light)" srcset="./images/logo-light-mode.png">
-    <img src="./images/logo-light-mode.png" alt="BrainDrive Logo" width="300" style="vertical-align: middle;">
+    <img src="./images/logo-light-mode.png" alt="BrainDrive Logo" width="300" align="middle">
   </picture>
   &nbsp;&nbsp;&nbsp;
-  <img src="./images/localllm-2nd-place-badge.png" alt="r/LocalLLM 30-Day Innovation Contest 2025 — 2nd Place" width="173" style="vertical-align: middle;">
+  <img src="./images/localllm-2nd-place-badge.png" alt="r/LocalLLM 30-Day Innovation Contest 2025 — 2nd Place" width="173" align="middle">
   <br>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT%20License-green.svg" alt="License"></a>
 </p>
