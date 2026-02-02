@@ -50,6 +50,9 @@ export function useAnimation(
 
   // Event handlers
   const handleAnimationStart = useCallback((event: AnimationEvent) => {
+    if (!currentAnimationId.current) {
+      currentAnimationId.current = event.animationId;
+    }
     if (event.animationId === currentAnimationId.current) {
       setIsPlaying(true);
       setIsPaused(false);

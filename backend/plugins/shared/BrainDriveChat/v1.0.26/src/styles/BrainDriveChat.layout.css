@@ -1,0 +1,232 @@
+/* Main container */
+.braindrive-chat-container {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+  color: var(--text-color);
+  background-color: var(--bg-color);
+  transition: background-color 0.3s ease, color 0.3s ease;
+  display: flex;
+  flex-direction: column;
+  height: 100%; /* Use full height of the container */
+  max-height: 100%; /* Prevent the container from growing beyond its allocated space */
+  width: 100%;
+  overflow: hidden; /* Prevent any overflow on the main container */
+  position: relative;
+}
+
+/* Chat-specific components */
+.chat-paper {
+  background-color: var(--paper-bg);
+  border-radius: 0.5rem;
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
+  transition: background-color 0.3s ease, box-shadow 0.3s ease;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  max-height: 100%; /* Prevent overflow */
+  min-height: 0; /* Allow flex items to shrink below their content size */
+  position: relative;
+}
+
+.chat-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid var(--border-color);
+  background-color: var(--paper-bg);
+  flex-shrink: 0;
+}
+
+.chat-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.chat-history-container {
+  position: relative;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  max-height: 100%;
+  overflow: hidden;
+}
+
+.chat-history {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 1rem 1rem 6rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-color) transparent;
+  min-height: 0; /* Allow the flex item to shrink below its content size */
+  max-height: 100%; /* Prevent the chat history from expanding beyond available space */
+  /* Use flex: 1 to take available space between header and input */
+  height: 0; /* This forces the flex item to respect the container height */
+}
+
+.chat-history::-webkit-scrollbar {
+  width: 6px;
+}
+
+.chat-history::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.chat-history::-webkit-scrollbar-thumb {
+  background-color: var(--border-color);
+  border-radius: 3px;
+}
+
+.chat-input-container {
+  display: flex;
+  padding: 1rem;
+  background-color: var(--paper-bg);
+  flex-shrink: 0;
+  border: none; /* Ensure no border on container */
+  align-items: center;
+}
+
+/* Chat input wrapper */
+.chat-input-wrapper {
+  position: relative;
+  flex: 1;
+  max-width: 100%;
+  display: flex;
+  align-items: stretch;
+  border: none; /* Ensure no border on wrapper */
+}
+
+/* Input container with buttons */
+.input-with-buttons {
+  position: relative;
+  flex: 1;
+  border: 1px solid var(--border-color);
+  border-radius: 24px; /* fixed radius so ends stay consistent as height grows */
+  background-color: var(--input-bg);
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, background-color 0.2s ease;
+  padding: 0.35rem 0.75rem;
+  display: flex;
+  align-items: center;
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.12);
+}
+
+.input-with-buttons:focus-within {
+  border-color: var(--button-primary-bg);
+  box-shadow: 0 0 0 2px rgba(33, 150, 243, 0.12), 0 8px 24px rgba(0, 0, 0, 0.18);
+}
+
+.chat-input-row {
+  display: flex;
+  align-items: center; /* center when single line */
+  gap: 0.75rem;
+  flex: 1;
+  min-height: 48px;
+}
+
+.chat-input-row.multiline {
+  align-items: flex-end; /* snap to bottom when multiline */
+}
+
+.chat-input {
+  width: 100%;
+  padding: 0.5rem 0.75rem;
+  border: none !important; /* Force no border on textarea */
+  border-radius: 20px;
+  background-color: transparent;
+  color: var(--text-color);
+  resize: none;
+  min-height: calc(1.5em + 0.5rem); /* ~1 line */
+  max-height: calc(1.5em * 4 + 0.5rem); /* ~4 lines */
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-color) transparent;
+  font-family: inherit;
+  font-size: inherit;
+  line-height: 1.5;
+  box-shadow: none !important; /* Remove any default box-shadow */
+  outline: none; /* Remove any default outline */
+}
+
+.chat-input:focus {
+  outline: none;
+}
+
+/* Overlay button row removed in favor of inline flex layout */
+
+/* Resize Handle */
+.resize-handle {
+  height: 8px;
+  background-color: transparent;
+  cursor: row-resize;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  position: relative;
+  transition: background-color 0.2s ease;
+}
+
+.resize-handle:hover {
+  background-color: var(--border-color);
+}
+
+.resize-handle-line {
+  width: 40px;
+  height: 2px;
+  background-color: var(--border-color);
+  border-radius: 1px;
+  transition: all 0.2s ease;
+}
+
+.resize-handle:hover .resize-handle-line {
+  width: 60px;
+  background-color: var(--button-primary-bg);
+}
+
+/* History Section - Below Chat */
+.history-section {
+  border-top: 1px solid var(--border-color);
+  background-color: var(--paper-bg);
+  padding: 1rem;
+  flex-shrink: 0;
+  transition: padding 0.3s ease;
+}
+
+.history-section.collapsed {
+  padding: 0.5rem 1rem;
+}
+
+.history-header {
+  margin-bottom: 0.75rem;
+}
+
+.history-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  max-height: calc(40vh - 60px); /* Dynamic height based on viewport */
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-color) transparent;
+  padding-right: 8px; /* Add padding for scrollbar */
+  margin-bottom: 8px; /* Add margin to ensure last items are visible */
+}
+
+.history-list::-webkit-scrollbar {
+  width: 4px;
+}
+
+.history-list::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.history-list::-webkit-scrollbar-thumb {
+  background-color: var(--border-color);
+  border-radius: 2px;
+}

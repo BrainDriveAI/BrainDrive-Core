@@ -1,4 +1,18 @@
 /**
+ * Plugin type classification for backend plugin architecture
+ */
+export type PluginType = 'frontend' | 'backend' | 'fullstack';
+
+/**
+ * Information about plugins that depend on this backend plugin
+ */
+export interface DependentPlugin {
+  id: string;
+  name: string;
+  enabled: boolean;
+}
+
+/**
  * Represents a plugin in the system
  */
 export interface Plugin {
@@ -34,6 +48,12 @@ export interface Plugin {
   latestVersion?: string;
   installationType?: string;
   permissions?: string[];
+  // Backend plugin architecture fields
+  pluginType?: PluginType;
+  endpointsFile?: string;
+  routePrefix?: string;
+  backendDependencies?: string[];
+  dependentPlugins?: DependentPlugin[];
 }
 
 /**
@@ -58,4 +78,6 @@ export interface Module {
   tags?: string[];
   author?: string;
   lastUpdated?: string;
+  // Backend plugin architecture fields
+  pluginType?: PluginType;
 }
