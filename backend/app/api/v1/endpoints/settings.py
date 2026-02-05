@@ -116,6 +116,29 @@ def mask_sensitive_data(definition_id: str, value: any) -> any:
     
     return value
 
+def _normalize_scope(scope_value):
+    if isinstance(scope_value, SettingScope):
+        return scope_value
+    if isinstance(scope_value, str):
+        scope_value = scope_value.strip()
+        if not scope_value:
+            return None
+        try:
+            return SettingScope(scope_value)
+        except ValueError:
+            return None
+    return None
+
+
+def _enforce_instance_ownership(instance: dict, auth: Optional[AuthContext]) -> None:
+    if instance.get("user_id"):
+        if not auth:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Authentication required for user settings"
+            )
+        ensure_setting_instance_belongs_to_user(instance, auth)
+
 async def get_definition_by_id(db, definition_id: str):
     """Helper function to get a setting definition by ID using direct SQL."""
     query = text("""
@@ -1258,10 +1281,13 @@ async def get_setting_instance(
             "created_at": row[7],
             "updated_at": row[8]
         }
+
+        _enforce_instance_ownership(instance, auth)
         
         # Check access permission
         scope_value = instance["scope"]
-        if scope_value in [SettingScope.USER.value, SettingScope.USER_PAGE.value]:
+        scope_enum = _normalize_scope(scope_value)
+        if scope_enum in [SettingScope.USER, SettingScope.USER_PAGE]:
             if not auth:
                 raise HTTPException(
                     status_code=status.HTTP_401_UNAUTHORIZED,
@@ -1269,7 +1295,7 @@ async def get_setting_instance(
                 )
             # Verify ownership using service helper
             ensure_setting_instance_belongs_to_user(instance, auth)
-        elif scope_value == SettingScope.SYSTEM.value:
+        elif scope_enum == SettingScope.SYSTEM:
             if not auth or not auth.is_admin:
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
@@ -1321,17 +1347,20 @@ async def update_setting_instance(
             "id": row[0],
             "definition_id": row[1],
             "name": row[2],
-            "value": json.loads(row[3]) if row[3] else None,
+            "value": row[3],
             "scope": row[4],
             "user_id": row[5],
             "page_id": row[6],
             "created_at": row[7],
             "updated_at": row[8]
         }
+
+        _enforce_instance_ownership(instance, auth)
         
         # Check access permission
         scope_value = instance["scope"]
-        if scope_value in [SettingScope.USER.value, SettingScope.USER_PAGE.value]:
+        scope_enum = _normalize_scope(scope_value)
+        if scope_enum in [SettingScope.USER, SettingScope.USER_PAGE]:
             if not auth:
                 raise HTTPException(
                     status_code=status.HTTP_401_UNAUTHORIZED,
@@ -1339,7 +1368,7 @@ async def update_setting_instance(
                 )
             # Verify ownership using service helper
             ensure_setting_instance_belongs_to_user(instance, auth)
-        elif scope_value == SettingScope.SYSTEM.value:
+        elif scope_enum == SettingScope.SYSTEM:
             if not auth or not auth.is_admin:
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
@@ -1449,17 +1478,20 @@ async def put_setting_instance(
             "id": row[0],
             "definition_id": row[1],
             "name": row[2],
-            "value": json.loads(row[3]) if row[3] else None,
+            "value": row[3],
             "scope": row[4],
             "user_id": row[5],
             "page_id": row[6],
             "created_at": row[7],
             "updated_at": row[8]
         }
+
+        _enforce_instance_ownership(instance, auth)
         
         # Check access permission
         scope_value = instance["scope"]
-        if scope_value in [SettingScope.USER.value, SettingScope.USER_PAGE.value]:
+        scope_enum = _normalize_scope(scope_value)
+        if scope_enum in [SettingScope.USER, SettingScope.USER_PAGE]:
             if not auth:
                 raise HTTPException(
                     status_code=status.HTTP_401_UNAUTHORIZED,
@@ -1467,7 +1499,7 @@ async def put_setting_instance(
                 )
             # Verify ownership using service helper
             ensure_setting_instance_belongs_to_user(instance, auth)
-        elif scope_value == SettingScope.SYSTEM.value:
+        elif scope_enum == SettingScope.SYSTEM:
             if not auth or not auth.is_admin:
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
@@ -1588,17 +1620,20 @@ async def delete_setting_instance(
             "id": row[0],
             "definition_id": row[1],
             "name": row[2],
-            "value": json.loads(row[3]) if row[3] else None,
+            "value": row[3],
             "scope": row[4],
             "user_id": row[5],
             "page_id": row[6],
             "created_at": row[7],
             "updated_at": row[8]
         }
+
+        _enforce_instance_ownership(instance, auth)
         
         # Check access permission
         scope_value = instance["scope"]
-        if scope_value in [SettingScope.USER.value, SettingScope.USER_PAGE.value]:
+        scope_enum = _normalize_scope(scope_value)
+        if scope_enum in [SettingScope.USER, SettingScope.USER_PAGE]:
             if not auth:
                 raise HTTPException(
                     status_code=status.HTTP_401_UNAUTHORIZED,
@@ -1606,7 +1641,7 @@ async def delete_setting_instance(
                 )
             # Verify ownership using service helper
             ensure_setting_instance_belongs_to_user(instance, auth)
-        elif scope_value == SettingScope.SYSTEM.value:
+        elif scope_enum == SettingScope.SYSTEM:
             if not auth or not auth.is_admin:
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,

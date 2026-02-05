@@ -6,6 +6,7 @@ from sqlalchemy import select, func, text
 from ..plugins import PluginManager
 from ..plugins.repository import PluginRepository
 from ..core.database import get_db
+from ..core.config import settings
 from ..models.plugin import Plugin, Module
 from ..models.user import User
 from pathlib import Path
@@ -22,8 +23,22 @@ logger = structlog.get_logger()
 PLUGINS_DIR = Path(__file__).parent.parent.parent / "plugins"
 plugin_manager = PluginManager(str(PLUGINS_DIR))
 
+
+def _safe_join(base_dir: Path, relative_path: str) -> Optional[Path]:
+    if not relative_path:
+        return None
+    if Path(relative_path).is_absolute():
+        return None
+    base_dir = base_dir.resolve()
+    candidate = (base_dir / relative_path).resolve()
+    try:
+        candidate.relative_to(base_dir)
+    except ValueError:
+        return None
+    return candidate
+
 # Import new auth dependencies
-from ..core.auth_deps import require_user
+from ..core.auth_deps import require_user, optional_user
 from ..core.auth_context import AuthContext
 
 # Create a router for plugin management endpoints WITHOUT a prefix
@@ -1088,6 +1103,11 @@ async def serve_plugin_static(
     
     # Try multiple possible locations for the file
     possible_paths = []
+
+    def add_candidate(base_dir: Path) -> None:
+        candidate = _safe_join(base_dir, path)
+        if candidate:
+            possible_paths.append(candidate)
     
     # 1. New architecture: Shared storage with version
     if plugin.plugin_slug and plugin.version:
@@ -1095,34 +1115,34 @@ async def serve_plugin_static(
         # PLUGINS_DIR is already /path/to/project/plugins, so PLUGINS_DIR.parent is /path/to/project
         # We need to go to /path/to/project/backend/backend/plugins/shared/
         shared_plugin_dir = PLUGINS_DIR.parent / "backend" / "plugins" / "shared" / plugin.plugin_slug / f"v{plugin.version}"
-        possible_paths.append(shared_plugin_dir / path)
+        add_candidate(shared_plugin_dir)
 
     # 2. New architecture: Shared storage without version (fallback)
     if plugin.plugin_slug:
         shared_plugin_dir = PLUGINS_DIR.parent / "backend" / "plugins" / "shared" / plugin.plugin_slug
-        possible_paths.append(shared_plugin_dir / path)
+        add_candidate(shared_plugin_dir)
 
     # 3. Backend plugins directory (where webpack builds to)
     if plugin.plugin_slug:
         backend_plugin_dir = PLUGINS_DIR.parent / "backend" / "plugins" / plugin.plugin_slug
-        possible_paths.append(backend_plugin_dir / path)
+        add_candidate(backend_plugin_dir)
 
     # 4. User-specific directory with plugin_slug
     if plugin.user_id and plugin.plugin_slug:
         user_plugin_dir = PLUGINS_DIR / plugin.user_id / plugin.plugin_slug
-        possible_paths.append(user_plugin_dir / path)
+        add_candidate(user_plugin_dir)
     
     # 5. User-specific directory with plugin ID
     if plugin.user_id:
         user_plugin_dir = PLUGINS_DIR / plugin.user_id / plugin.id
-        possible_paths.append(user_plugin_dir / path)
+        add_candidate(user_plugin_dir)
     
     # 6. Legacy path directly under plugins directory with plugin_slug
     if plugin.plugin_slug:
-        possible_paths.append(PLUGINS_DIR / plugin.plugin_slug / path)
+        add_candidate(PLUGINS_DIR / plugin.plugin_slug)
     
     # 7. Legacy path directly under plugins directory with plugin ID
-    possible_paths.append(PLUGINS_DIR / plugin.id / path)
+    add_candidate(PLUGINS_DIR / plugin.id)
     
     # Try each path
     for plugin_path in possible_paths:
@@ -1139,7 +1159,8 @@ async def serve_plugin_static(
 async def serve_plugin_static_public(
     plugin_id: str,
     path: str,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    auth: Optional[AuthContext] = Depends(optional_user),
 ):
     """Serve static files from plugin directory without authentication.
     This endpoint is specifically for serving JavaScript bundles and other
@@ -1152,6 +1173,9 @@ async def serve_plugin_static_public(
     if file_ext not in allowed_extensions:
         logger.warning(f"Attempted to access disallowed file type: {file_ext}")
         raise HTTPException(status_code=403, detail="File type not allowed")
+
+    if settings.APP_ENV.lower() not in {"dev", "development", "test", "local"} and auth is None:
+        raise HTTPException(status_code=401, detail="Authentication required")
     
     # Skip if the path starts with "modules/" to avoid catching module endpoints
     if path.startswith("modules/"):
@@ -1160,12 +1184,18 @@ async def serve_plugin_static_public(
     logger.debug(f"Serving public static file for plugin_id: {plugin_id}, path: {path}")
     
     # Try to find the plugin by ID first
-    plugin_query = await db.execute(select(Plugin).where(Plugin.id == plugin_id))
+    plugin_filters = [Plugin.id == plugin_id]
+    if auth:
+        plugin_filters.append(Plugin.user_id == auth.user_id)
+    plugin_query = await db.execute(select(Plugin).where(*plugin_filters))
     plugin = plugin_query.scalars().first()
     
     # If not found by ID, try to find by plugin_slug
     if not plugin:
-        plugin_query = await db.execute(select(Plugin).where(Plugin.plugin_slug == plugin_id))
+        plugin_filters = [Plugin.plugin_slug == plugin_id]
+        if auth:
+            plugin_filters.append(Plugin.user_id == auth.user_id)
+        plugin_query = await db.execute(select(Plugin).where(*plugin_filters))
         plugin = plugin_query.scalars().first()
     
     if not plugin:
@@ -1176,6 +1206,11 @@ async def serve_plugin_static_public(
     
     # Try multiple possible locations for the file
     possible_paths = []
+
+    def add_candidate(base_dir: Path) -> None:
+        candidate = _safe_join(base_dir, path)
+        if candidate:
+            possible_paths.append(candidate)
     
     # 1. New architecture: Shared storage with version
     if plugin.plugin_slug and plugin.version:
@@ -1183,37 +1218,37 @@ async def serve_plugin_static_public(
         # PLUGINS_DIR is already /path/to/project/plugins, so PLUGINS_DIR.parent is /path/to/project
         # We need to go to /path/to/project/backend/backend/plugins/shared/
         shared_plugin_dir = PLUGINS_DIR.parent / "plugins" / "shared" / plugin.plugin_slug / f"v{plugin.version}"
-        possible_paths.append(shared_plugin_dir / path)
+        add_candidate(shared_plugin_dir)
         logger.debug(f"Added new architecture path with version: {shared_plugin_dir / path}")
 
     # 2. New architecture: Shared storage without version (fallback)
     if plugin.plugin_slug:
         shared_plugin_dir = PLUGINS_DIR.parent / "plugins" / "shared" / plugin.plugin_slug
-        possible_paths.append(shared_plugin_dir / path)
+        add_candidate(shared_plugin_dir)
         logger.debug(f"Added new architecture path without version: {shared_plugin_dir / path}")
 
     # 3. Backend plugins directory (where webpack builds to)
     if plugin.plugin_slug:
         backend_plugin_dir = PLUGINS_DIR.parent / "backend" / "plugins" / plugin.plugin_slug
-        possible_paths.append(backend_plugin_dir / path)
+        add_candidate(backend_plugin_dir)
         logger.debug(f"Added backend plugins path: {backend_plugin_dir / path}")
 
     # 4. User-specific directory with plugin_slug
     if plugin.user_id and plugin.plugin_slug:
         user_plugin_dir = PLUGINS_DIR / plugin.user_id / plugin.plugin_slug
-        possible_paths.append(user_plugin_dir / path)
+        add_candidate(user_plugin_dir)
     
     # 5. User-specific directory with plugin ID
     if plugin.user_id:
         user_plugin_dir = PLUGINS_DIR / plugin.user_id / plugin.id
-        possible_paths.append(user_plugin_dir / path)
+        add_candidate(user_plugin_dir)
     
     # 6. Legacy path directly under plugins directory with plugin_slug
     if plugin.plugin_slug:
-        possible_paths.append(PLUGINS_DIR / plugin.plugin_slug / path)
+        add_candidate(PLUGINS_DIR / plugin.plugin_slug)
     
     # 7. Legacy path directly under plugins directory with plugin ID
-    possible_paths.append(PLUGINS_DIR / plugin.id / path)
+    add_candidate(PLUGINS_DIR / plugin.id)
     
     # Try each path
     for plugin_path in possible_paths:

@@ -3,7 +3,7 @@ import json
 from pathlib import Path
 from typing import List, Optional, Tuple, Union
 from pydantic_settings import BaseSettings
-from pydantic import field_validator
+from pydantic import field_validator, model_validator
 
 def _env_file_candidates() -> Tuple[Union[str, Path], ...]:
     """Build a prioritized list of .env files for cross-platform support."""
@@ -53,6 +53,8 @@ class Settings(BaseSettings):
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
     REFRESH_TOKEN_EXPIRE_DAYS: int = 30
     ALGORITHM: str = "HS256"
+    COOKIE_SAMESITE: str = "lax"
+    COOKIE_SECURE: Optional[bool] = None
     
     # Rate Limiting & Request Size
     MAX_REQUEST_SIZE: int = 5 * 1024 * 1024  # 5MB for JSON bodies
@@ -120,6 +122,22 @@ class Settings(BaseSettings):
                 return json.loads(s)
             return [p.strip() for p in s.split(",") if p.strip()]
         return v
+
+    @model_validator(mode="after")
+    def enforce_production_security(self):
+        env = (self.APP_ENV or "").lower()
+        if env in {"prod", "production", "staging"}:
+            if self.SECRET_KEY == "your-secret-key-here":
+                raise ValueError("SECRET_KEY must be set for production/staging.")
+            if not self.ENCRYPTION_MASTER_KEY:
+                raise ValueError("ENCRYPTION_MASTER_KEY must be set for production/staging.")
+            if any(host == "*" for host in (self.ALLOWED_HOSTS or [])):
+                raise ValueError("ALLOWED_HOSTS cannot include '*' in production/staging.")
+            if (self.FORWARDED_ALLOW_IPS or "").strip() == "*":
+                raise ValueError("FORWARDED_ALLOW_IPS cannot be '*' in production/staging.")
+            if not self.PLUGIN_RUNTIME_TOKEN or not self.JOB_WORKER_TOKEN or not self.PLUGIN_LIFECYCLE_TOKEN:
+                raise ValueError("Service tokens must be set in production/staging.")
+        return self
 
     model_config = {
         "env_file": _env_file_candidates(),
