@@ -6,7 +6,9 @@ from app.api.v1.api import api_router
 from app.core.config import settings
 from app.routers.plugins import plugin_manager
 from app.plugins.service_installler.start_stop_plugin_services import start_plugin_services_on_startup, stop_all_plugin_services_on_shutdown
+from app.plugins.route_loader import get_plugin_loader
 from app.core.job_manager_provider import initialize_job_manager, shutdown_job_manager
+from app.core.database import db_factory
 import logging
 import time
 import structlog
@@ -34,6 +36,16 @@ async def startup_event():
     await initialize_job_manager()
     # Start plugin services
     await start_plugin_services_on_startup()
+
+    # Load plugin-owned API routes on startup.
+    plugin_loader = get_plugin_loader()
+    plugin_loader.set_app(app)
+    async with db_factory.session_factory() as session:
+        try:
+            await plugin_loader.reload_routes(session)
+        except Exception as loader_error:
+            logger.warning("Plugin endpoint route reload failed during startup", error=str(loader_error))
+
     logger.info("Settings initialization completed")
 
 

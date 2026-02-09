@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, Integer, Boolean, ForeignKey, Text, JSON, UniqueConstraint, TIMESTAMP, DateTime
+from sqlalchemy import Column, String, Integer, Boolean, ForeignKey, Text, TIMESTAMP, DateTime
 import sqlalchemy
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
@@ -18,6 +18,7 @@ class Plugin(Base):
     description = Column(String, nullable=False)
     version = Column(String, nullable=False)
     type = Column(String, default="frontend")
+    plugin_type = Column(String, default="frontend")
     enabled = Column(Boolean, default=True)
     icon = Column(String)
     category = Column(String)
@@ -48,6 +49,9 @@ class Plugin(Base):
     messages = Column(Text)       # Stored as JSON string
     dependencies = Column(Text)   # Stored as JSON string
     required_services_runtime = Column(Text, nullable=True)
+    endpoints_file = Column(String, nullable=True)
+    route_prefix = Column(String, nullable=True)
+    backend_dependencies = Column(Text, nullable=True)
     
     # Timestamps
     created_at = Column(String, default=func.now())
@@ -69,7 +73,17 @@ class Plugin(Base):
     def to_dict(self):
         """Convert model to dictionary."""
         import json
-        
+
+        def _deserialize_json(raw_value, default):
+            if raw_value is None:
+                return default
+            if isinstance(raw_value, (dict, list)):
+                return raw_value
+            try:
+                return json.loads(raw_value)
+            except (TypeError, json.JSONDecodeError):
+                return default
+
         result = {
             "id": self.id,
             "plugin_slug": self.plugin_slug,
@@ -77,6 +91,7 @@ class Plugin(Base):
             "description": self.description,
             "version": self.version,
             "type": self.type,
+            "pluginType": self.plugin_type,
             "enabled": self.enabled,
             "icon": self.icon,
             "category": self.category,
@@ -100,33 +115,21 @@ class Plugin(Base):
             "updateAvailable": self.update_available,
             "latestVersion": self.latest_version,
             "installationType": self.installation_type,
+            "endpointsFile": self.endpoints_file,
+            "routePrefix": self.route_prefix,
         }
         
         # Deserialize JSON fields
-        if self.config_fields:
-            result["configFields"] = json.loads(self.config_fields)
-        else:
-            result["configFields"] = {}
+        result["configFields"] = _deserialize_json(self.config_fields, {})
             
-        if self.messages:
-            result["messages"] = json.loads(self.messages)
-        else:
-            result["messages"] = {}
+        result["messages"] = _deserialize_json(self.messages, {})
             
-        if self.dependencies:
-            result["dependencies"] = json.loads(self.dependencies)
-        else:
-            result["dependencies"] = []
+        result["dependencies"] = _deserialize_json(self.dependencies, [])
             
-        if self.permissions:
-            result["permissions"] = json.loads(self.permissions)
-        else:
-            result["permissions"] = []
+        result["permissions"] = _deserialize_json(self.permissions, [])
 
-        if self.required_services_runtime:
-            result["requiredServicesRuntime"] = json.loads(self.required_services_runtime)
-        else:
-            result["requiredServicesRuntime"] = []
+        result["requiredServicesRuntime"] = _deserialize_json(self.required_services_runtime, [])
+        result["backendDependencies"] = _deserialize_json(self.backend_dependencies, [])
 
         return result
     
@@ -152,6 +155,11 @@ class Plugin(Base):
             "updateAvailable": "update_available",
             "latestVersion": "latest_version",
             "installationType": "installation_type",
+            "pluginType": "plugin_type",
+            "endpointsFile": "endpoints_file",
+            "routePrefix": "route_prefix",
+            "backendDependencies": "backend_dependencies",
+            "requiredServicesRuntime": "required_services_runtime",
         }
         
         # Create a new dictionary with snake_case keys
@@ -164,7 +172,14 @@ class Plugin(Base):
                 db_key = ''.join(['_' + c.lower() if c.isupper() else c for c in key]).lstrip('_')
             
             # Handle special fields
-            if db_key in ["config_fields", "messages", "dependencies", "permissions"] and value is not None:
+            if db_key in [
+                "config_fields",
+                "messages",
+                "dependencies",
+                "permissions",
+                "backend_dependencies",
+                "required_services_runtime",
+            ] and value is not None and not isinstance(value, str):
                 db_data[db_key] = json.dumps(value)
             else:
                 db_data[db_key] = value
@@ -174,12 +189,12 @@ class Plugin(Base):
             db_data.pop("modules")
 
         # Handle service runtimes (only store names in plugin table)
-        if "requiredServicesRuntime" in db_data and db_data["requiredServicesRuntime"] is not None:
-            db_data["required_services_runtime"] = json.dumps([
-                r["name"] for r in db_data["requiredServicesRuntime"]
-            ])
-            db_data.pop("requiredServicesRuntime")
-            
+        runtime_value = db_data.get("required_services_runtime")
+        if isinstance(runtime_value, list) and runtime_value and isinstance(runtime_value[0], dict):
+            db_data["required_services_runtime"] = json.dumps(
+                [entry["name"] for entry in runtime_value if isinstance(entry, dict) and entry.get("name")]
+            )
+
         return cls(**db_data)
 
 

@@ -405,9 +405,30 @@ class PluginRepository:
                     setattr(existing_plugin, "messages", json.dumps(value) if value else None)
                 elif key == "dependencies":
                     setattr(existing_plugin, "dependencies", json.dumps(value) if value else None)
+                elif key == "requiredServicesRuntime":
+                    runtime_value = value
+                    if isinstance(runtime_value, list) and runtime_value and isinstance(runtime_value[0], dict):
+                        runtime_value = [
+                            entry["name"]
+                            for entry in runtime_value
+                            if isinstance(entry, dict) and entry.get("name")
+                        ]
+                    setattr(
+                        existing_plugin,
+                        "required_services_runtime",
+                        json.dumps(runtime_value) if runtime_value is not None and not isinstance(runtime_value, str) else runtime_value,
+                    )
+                elif key == "backendDependencies":
+                    setattr(
+                        existing_plugin,
+                        "backend_dependencies",
+                        json.dumps(value) if value is not None and not isinstance(value, str) else value,
+                    )
                 else:
                     # Convert camelCase to snake_case
                     db_key = ''.join(['_' + c.lower() if c.isupper() else c for c in key]).lstrip('_')
+                    if db_key in ["required_services_runtime", "backend_dependencies"] and value is not None and not isinstance(value, str):
+                        value = json.dumps(value)
                     setattr(existing_plugin, db_key, value)
             
             # Update modules if provided

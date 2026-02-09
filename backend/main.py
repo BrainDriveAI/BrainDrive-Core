@@ -31,6 +31,7 @@ from app.models import UserRole
 from app.core.database import db_factory, get_db
 from app.core.job_manager_provider import initialize_job_manager, shutdown_job_manager
 from app.plugins.service_installler.start_stop_plugin_services import start_plugin_services_from_settings_on_startup, stop_all_plugin_services_on_shutdown
+from app.plugins.route_loader import get_plugin_loader
 from app.middleware.request_size import RequestSizeMiddleware
 from app.middleware.request_id import RequestIdMiddleware
 
@@ -162,6 +163,14 @@ async def lifespan(app: FastAPI):
             await initialize_job_manager()
             # Start plugin services
             await start_plugin_services_from_settings_on_startup()
+
+            # Load plugin-owned API routes on startup.
+            plugin_loader = get_plugin_loader()
+            plugin_loader.set_app(app)
+            try:
+                await plugin_loader.reload_routes(session)
+            except Exception as loader_error:
+                logger.warning(f"Plugin endpoint route reload failed during startup: {loader_error}")
 
         yield
     except Exception as e:
