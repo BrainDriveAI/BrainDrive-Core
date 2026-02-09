@@ -4,7 +4,7 @@ Ollama AI provider implementation (clean and streaming-ready).
 import httpx
 import json
 import asyncio
-from typing import Dict, List, Any, AsyncGenerator
+from typing import Dict, List, Any, AsyncGenerator, Optional
 from .base import AIProvider
 
 class OllamaProvider(AIProvider):
@@ -143,6 +143,27 @@ class OllamaProvider(AIProvider):
         logger.info(f"[OLLAMA] Built Ollama options: {options}")
         return options
 
+    def _normalize_finish_reason(self, done_reason: Any, done: bool) -> Optional[str]:
+        """
+        Normalize Ollama done_reason into provider-agnostic finish reasons.
+        Token-limit truncation is normalized to "length".
+        """
+        if not done:
+            return None
+
+        if done_reason is None:
+            return "stop"
+
+        normalized = str(done_reason).strip().lower()
+        if not normalized:
+            return "stop"
+
+        if normalized in {"length", "max_tokens", "max_token", "token_limit", "context_length"}:
+            return "length"
+        if normalized in {"stop", "eos", "end_turn"}:
+            return "stop"
+        return normalized
+
     async def _call_ollama_api(self, prompt: str, model: str, params: Dict[str, Any], is_streaming: bool = False) -> Dict[str, Any]:
         import logging
         logger = logging.getLogger(__name__)
@@ -178,12 +199,13 @@ class OllamaProvider(AIProvider):
                     detail = await self._extract_error_detail(http_err.response)
                     return self._format_error(f"{http_err} | {detail}", model)
                 result = response.json()
+                done = bool(result.get("done", False))
                 return {
                     "text": result.get("response", ""),
                     "provider": "ollama",
                     "model": model,
                     "metadata": result,
-                    "finish_reason": result.get("done") and "stop" or None
+                    "finish_reason": self._normalize_finish_reason(result.get("done_reason"), done=done),
                 }
         except httpx.ConnectError as e:
             logger.error(f"[OLLAMA] ERROR: Cannot connect to Ollama server at {api_url}")
@@ -254,13 +276,14 @@ class OllamaProvider(AIProvider):
                             if chunk:
                                 try:
                                     data = json.loads(chunk)
+                                    done = bool(data.get("done", False))
                                     yield {
                                         "text": data.get("response", ""),
                                         "provider": "ollama",
                                         "model": model,
                                         "metadata": data,
-                                        "finish_reason": data.get("done") and "stop" or None,
-                                        "done": data.get("done", False)
+                                        "finish_reason": self._normalize_finish_reason(data.get("done_reason"), done=done),
+                                        "done": done
                                     }
                                     await asyncio.sleep(0.01)
                                 except json.JSONDecodeError:

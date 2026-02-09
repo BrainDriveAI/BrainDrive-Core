@@ -34,6 +34,134 @@ TEST_ROUTES_ENABLED = os.getenv("ENABLE_TEST_ROUTES", "True").lower() == "true"
 
 router = APIRouter()
 
+DEFAULT_AUTO_CONTINUE_PROMPT = "Continue exactly where you left off. Do not repeat prior text."
+DEFAULT_AUTO_CONTINUE_MAX_PASSES = 2
+DEFAULT_AUTO_CONTINUE_MIN_PROGRESS_CHARS = 1
+
+
+def extract_finish_reason(chunk: Dict[str, Any]) -> Optional[str]:
+    """Extract finish_reason from provider chunk variants."""
+    if not isinstance(chunk, dict):
+        return None
+
+    finish_reason = chunk.get("finish_reason")
+    if isinstance(finish_reason, str) and finish_reason.strip():
+        return finish_reason.strip()
+
+    choices = chunk.get("choices")
+    if isinstance(choices, list) and choices:
+        choice = choices[0] if isinstance(choices[0], dict) else {}
+        finish_reason = choice.get("finish_reason")
+        if isinstance(finish_reason, str) and finish_reason.strip():
+            return finish_reason.strip()
+
+    metadata = chunk.get("metadata")
+    if isinstance(metadata, dict):
+        done_reason = metadata.get("done_reason")
+        if isinstance(done_reason, str) and done_reason.strip():
+            return done_reason.strip()
+
+    return None
+
+
+def extract_chunk_content(chunk: Dict[str, Any]) -> str:
+    """Extract text content from provider chunk variants."""
+    if not isinstance(chunk, dict):
+        return ""
+
+    text = chunk.get("text")
+    if isinstance(text, str):
+        return text
+
+    choices = chunk.get("choices")
+    if isinstance(choices, list) and choices:
+        choice = choices[0] if isinstance(choices[0], dict) else {}
+        delta = choice.get("delta")
+        if isinstance(delta, dict):
+            content = delta.get("content")
+            if isinstance(content, str):
+                return content
+
+        choice_text = choice.get("text")
+        if isinstance(choice_text, str):
+            return choice_text
+
+    return ""
+
+
+def is_truncation_finish_reason(
+    reason: Optional[str],
+    provider: Optional[str] = None,
+    chunk: Optional[Dict[str, Any]] = None,
+) -> bool:
+    """Return True when finish_reason indicates token-limit truncation."""
+    if not reason:
+        if not isinstance(chunk, dict):
+            return False
+        metadata = chunk.get("metadata")
+        done_reason = metadata.get("done_reason") if isinstance(metadata, dict) else None
+        reason = done_reason if isinstance(done_reason, str) else None
+        if not reason:
+            return False
+
+    normalized = reason.strip().lower()
+    provider_name = (provider or "").strip().lower()
+
+    truncation_reasons = {
+        "length",
+        "max_tokens",
+        "max_token",
+        "max_output_tokens",
+        "token_limit",
+    }
+    if provider_name == "claude":
+        truncation_reasons.update({"max_tokens", "length"})
+    if provider_name == "ollama":
+        truncation_reasons.update({"length", "max_tokens"})
+
+    if normalized in truncation_reasons:
+        return True
+
+    return "length" in normalized or "max_tokens" in normalized
+
+
+def build_continuation_messages(
+    base_messages: List[Dict[str, Any]],
+    full_response: str,
+    continuation_prompt: str = DEFAULT_AUTO_CONTINUE_PROMPT,
+) -> List[Dict[str, Any]]:
+    """Build a continuation prompt using the merged assistant response so far."""
+    return [
+        *base_messages,
+        {"role": "assistant", "content": full_response},
+        {"role": "user", "content": continuation_prompt},
+    ]
+
+
+def _as_bool(value: Any, default: bool) -> bool:
+    """Parse permissive bool values from request params."""
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"false", "0", "no", "off", ""}:
+            return False
+        if lowered in {"true", "1", "yes", "on"}:
+            return True
+    return bool(value)
+
+
+def _as_int(value: Any, default: int, minimum: int, maximum: int) -> int:
+    """Parse bounded int values from request params."""
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        parsed = default
+    return max(minimum, min(maximum, parsed))
+
+
 # Helper function to get provider instance from request
 async def get_provider_instance_from_request(request, db):
     """Helper function to get provider instance from request."""
@@ -1320,7 +1448,7 @@ async def chat_completion(request: ChatCompletionRequest, db: AsyncSession = Dep
                     await db.commit()
                     print(f"Added persona sample greeting: {request.persona_sample_greeting[:50]}...")
             
-            document_context_mode = request.params.get("document_context_mode")
+            document_context_mode = (request.params or {}).get("document_context_mode")
 
             # Apply persona prompt/model settings after history merge (preserve new persona changes)
             combined_messages, enhanced_params = apply_persona_prompt_and_params(
@@ -1332,8 +1460,25 @@ async def chat_completion(request: ChatCompletionRequest, db: AsyncSession = Dep
             )
 
             # Remove local-only params before sending to provider
-            if "document_context_mode" in enhanced_params:
-                enhanced_params.pop("document_context_mode", None)
+            provider_params = enhanced_params.copy()
+            provider_params.pop("document_context_mode", None)
+
+            auto_continue_enabled = _as_bool(provider_params.pop("auto_continue", True), True)
+            auto_continue_max_passes = _as_int(
+                provider_params.pop("auto_continue_max_passes", DEFAULT_AUTO_CONTINUE_MAX_PASSES),
+                default=DEFAULT_AUTO_CONTINUE_MAX_PASSES,
+                minimum=0,
+                maximum=10,
+            )
+            auto_continue_min_progress_chars = _as_int(
+                provider_params.pop("auto_continue_min_progress_chars", DEFAULT_AUTO_CONTINUE_MIN_PROGRESS_CHARS),
+                default=DEFAULT_AUTO_CONTINUE_MIN_PROGRESS_CHARS,
+                minimum=0,
+                maximum=200,
+            )
+            auto_continue_prompt = provider_params.pop("auto_continue_prompt", DEFAULT_AUTO_CONTINUE_PROMPT)
+            if not isinstance(auto_continue_prompt, str) or not auto_continue_prompt.strip():
+                auto_continue_prompt = DEFAULT_AUTO_CONTINUE_PROMPT
 
             # Store incoming messages (user/system) in the database
             for msg in request.messages:
@@ -1361,6 +1506,11 @@ async def chat_completion(request: ChatCompletionRequest, db: AsyncSession = Dep
                         full_response = ""
                         token_count = 0
                         start_time = time.time()
+                        finish_reason_history: List[str] = []
+                        finish_reason_final: Optional[str] = None
+                        auto_continue_attempts = 0
+                        truncated_at_least_once = False
+                        stopped_by_guardrail: Optional[str] = None
 
                         # Emit the conversation_id early so clients can persist context
                         try:
@@ -1373,33 +1523,107 @@ async def chat_completion(request: ChatCompletionRequest, db: AsyncSession = Dep
                             # Don't fail the stream if the initial event fails
                             print(f"Warning: failed to emit initial conversation_id event: {init_evt_error}")
 
-                        print(f"Sending {len(combined_messages)} messages to chat_completion_stream")
-                        for i, msg in enumerate(combined_messages):
-                            print(f"  Message {i+1}: role={msg.get('role', 'unknown')}, content={msg.get('content', '')[:50]}...")
-                        
-                        async for chunk in provider_instance.chat_completion_stream(
-                            combined_messages,
-                            request.model,
-                            enhanced_params
-                        ):
-                            if isinstance(chunk, dict) and "error" in chunk:
-                                raise RuntimeError(chunk["error"])
-                            # Extract content from the chunk
-                            content = ""
-                            if "choices" in chunk and len(chunk["choices"]) > 0:
-                                if "delta" in chunk["choices"][0]:
-                                    content = chunk["choices"][0]["delta"].get("content", "")
-                                elif "text" in chunk["choices"][0]:
-                                    content = chunk["choices"][0]["text"]
-                            
-                            # Accumulate the full response
-                            full_response += content
-                            token_count += 1
-                            
-                            # Yield each chunk and flush immediately
-                            yield f"data: {json.dumps(chunk)}\n\n"
-                            # Add an explicit flush marker
-                            yield ""
+                        pass_index = 1
+                        current_messages = combined_messages
+                        while True:
+                            pass_text = ""
+                            pass_finish_reason: Optional[str] = None
+
+                            logger.info(
+                                "chat_stream_pass_start provider=%s model=%s conversation_id=%s pass=%s",
+                                request.provider,
+                                request.model,
+                                conversation.id,
+                                pass_index,
+                            )
+
+                            async for chunk in provider_instance.chat_completion_stream(
+                                current_messages,
+                                request.model,
+                                provider_params
+                            ):
+                                if isinstance(chunk, dict) and "error" in chunk:
+                                    raise RuntimeError(chunk.get("error") or chunk.get("message") or "Unknown provider error")
+
+                                content = extract_chunk_content(chunk)
+                                if content:
+                                    pass_text += content
+                                    full_response += content
+
+                                detected_finish_reason = extract_finish_reason(chunk)
+                                if detected_finish_reason:
+                                    pass_finish_reason = detected_finish_reason
+
+                                token_count += 1
+
+                                # Yield each chunk and flush immediately
+                                yield f"data: {json.dumps(chunk)}\n\n"
+                                # Add an explicit flush marker
+                                yield ""
+
+                            finish_reason_final = pass_finish_reason
+                            finish_reason_history.append(pass_finish_reason or "unknown")
+
+                            pass_chars = len(pass_text)
+                            progress_chars = len(pass_text.strip())
+                            is_truncated = is_truncation_finish_reason(pass_finish_reason, request.provider)
+                            if is_truncated:
+                                truncated_at_least_once = True
+
+                            logger.info(
+                                "chat_stream_pass_end provider=%s model=%s conversation_id=%s pass=%s finish_reason=%s chars=%s",
+                                request.provider,
+                                request.model,
+                                conversation.id,
+                                pass_index,
+                                pass_finish_reason,
+                                pass_chars,
+                            )
+
+                            can_continue = (
+                                auto_continue_enabled
+                                and is_truncated
+                                and auto_continue_attempts < auto_continue_max_passes
+                            )
+
+                            if can_continue:
+                                # Guardrail: if continuation pass added almost nothing, stop to avoid loops.
+                                if pass_index > 1 and progress_chars <= auto_continue_min_progress_chars:
+                                    stopped_by_guardrail = "no_progress"
+                                    logger.warning(
+                                        "chat_stream_auto_continue_stopped provider=%s model=%s conversation_id=%s pass=%s reason=no_progress chars=%s threshold=%s",
+                                        request.provider,
+                                        request.model,
+                                        conversation.id,
+                                        pass_index,
+                                        progress_chars,
+                                        auto_continue_min_progress_chars,
+                                    )
+                                    break
+
+                                auto_continue_attempts += 1
+                                next_pass = pass_index + 1
+                                continuation_event = {
+                                    "type": "auto_continue",
+                                    "pass": next_pass,
+                                    "trigger_finish_reason": pass_finish_reason,
+                                    "attempt": auto_continue_attempts,
+                                }
+                                yield f"data: {json.dumps(continuation_event)}\n\n"
+                                yield ""
+
+                                current_messages = build_continuation_messages(
+                                    combined_messages,
+                                    full_response,
+                                    continuation_prompt=auto_continue_prompt,
+                                )
+                                pass_index = next_pass
+                                continue
+
+                            if auto_continue_enabled and is_truncated and auto_continue_attempts >= auto_continue_max_passes:
+                                stopped_by_guardrail = "max_passes_reached"
+
+                            break
                         
                         # Calculate tokens per second
                         elapsed_time = time.time() - start_time
@@ -1410,9 +1634,17 @@ async def chat_completion(request: ChatCompletionRequest, db: AsyncSession = Dep
                             "token_count": token_count,
                             "tokens_per_second": round(tokens_per_second, 1),
                             "model": request.model,
-                            "temperature": enhanced_params.get("temperature", 0.7),
-                            "streaming": True
+                            "temperature": provider_params.get("temperature", 0.7),
+                            "streaming": True,
+                            "auto_continue_enabled": auto_continue_enabled,
+                            "auto_continue_attempts": auto_continue_attempts,
+                            "auto_continue_max_passes": auto_continue_max_passes,
+                            "finish_reason_final": finish_reason_final,
+                            "finish_reason_history": finish_reason_history,
+                            "truncated_at_least_once": truncated_at_least_once,
                         }
+                        if stopped_by_guardrail:
+                            message_metadata["stopped_by_guardrail"] = stopped_by_guardrail
                         
                         # Add persona metadata if persona was used
                         if request.persona_id:
@@ -1478,7 +1710,7 @@ async def chat_completion(request: ChatCompletionRequest, db: AsyncSession = Dep
             result = await provider_instance.chat_completion(
                 combined_messages,
                 request.model,
-                enhanced_params
+                provider_params
             )
             if isinstance(result, dict) and result.get("error"):
                 raise HTTPException(
@@ -1513,7 +1745,7 @@ async def chat_completion(request: ChatCompletionRequest, db: AsyncSession = Dep
                 "token_count": int(token_count),
                 "tokens_per_second": round(tokens_per_second, 1),
                 "model": request.model,
-                "temperature": enhanced_params.get("temperature", 0.7),
+                "temperature": provider_params.get("temperature", 0.7),
                 "streaming": False
             }
             

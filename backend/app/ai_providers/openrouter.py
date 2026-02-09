@@ -232,12 +232,22 @@ class OpenRouterProvider(AIProvider):
             )
             
             async for chunk in stream:
-                if chunk.choices[0].delta.text:
+                if not chunk.choices:
+                    continue
+
+                choice = chunk.choices[0]
+                delta_text = ""
+                if hasattr(choice, "delta") and choice.delta is not None:
+                    delta_text = getattr(choice.delta, "text", None) or ""
+                finish_reason = choice.finish_reason
+
+                # Emit terminal finish chunks even when content is empty.
+                if delta_text or finish_reason is not None:
                     yield {
                         "choices": [
                             {
-                                "text": chunk.choices[0].delta.text,
-                                "finish_reason": chunk.choices[0].finish_reason
+                                "text": delta_text,
+                                "finish_reason": finish_reason
                             }
                         ],
                         "provider": "openrouter",
@@ -361,15 +371,25 @@ class OpenRouterProvider(AIProvider):
             stream = await self.client.chat.completions.create(**api_params)
             
             async for chunk in stream:
-                if chunk.choices[0].delta.content:
+                if not chunk.choices:
+                    continue
+
+                choice = chunk.choices[0]
+                delta = choice.delta
+                content = getattr(delta, "content", None) or ""
+                role = getattr(delta, "role", None) or "assistant"
+                finish_reason = choice.finish_reason
+
+                # Emit terminal finish chunks even when content is empty.
+                if content or finish_reason is not None:
                     yield {
                         "choices": [
                             {
                                 "delta": {
-                                    "content": chunk.choices[0].delta.content,
-                                    "role": chunk.choices[0].delta.role or "assistant"
+                                    "content": content,
+                                    "role": role
                                 },
-                                "finish_reason": chunk.choices[0].finish_reason
+                                "finish_reason": finish_reason
                             }
                         ],
                         "provider": "openrouter",
