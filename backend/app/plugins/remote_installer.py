@@ -346,12 +346,14 @@ class RemotePluginInstaller:
             from app.core.database import get_db
 
             current_version = None
+            plugin_type_hint = None
             async for db in get_db():
                 stmt = select(Plugin).where(Plugin.id == plugin_id, Plugin.user_id == user_id)
                 result = await db.execute(stmt)
                 plugin_record = result.scalar_one_or_none()
                 if plugin_record:
                     current_version = plugin_record.version
+                    plugin_type_hint = getattr(plugin_record, "type", None) or getattr(plugin_record, "plugin_type", None)
                 break
 
             # Create universal lifecycle manager and perform update
@@ -369,6 +371,7 @@ class RemotePluginInstaller:
             # Copy new version to shared storage
             shutil.copytree(download_result['extracted_path'], shared_storage_path)
             logger.info(f"Copied new version to shared storage: {shared_storage_path}")
+            self._ensure_major_version_alias(plugin_slug, release_info['version'])
 
             # Update database with new version information
             async for db in get_db():
@@ -398,12 +401,48 @@ class RemotePluginInstaller:
                 'success': True,
                 'message': f'Plugin updated successfully to version {release_info["version"]}',
                 'plugin_id': plugin_id,
-                'version': release_info['version']
+                'version': release_info['version'],
+                'plugin_type': plugin_type_hint,
             }
 
         except Exception as e:
             logger.error(f"Error updating plugin {plugin_id}: {e}")
             return {'success': False, 'error': str(e)}
+
+    def _ensure_major_version_alias(self, plugin_slug: str, version: str) -> None:
+        """Ensure ``v{major}`` points to ``v{full_version}`` for shared plugin files."""
+        normalized_version = str(version or "").strip().lstrip("v")
+        if not normalized_version:
+            return
+        major = normalized_version.split(".", 1)[0] or normalized_version
+        shared_root = self.plugins_base_dir / "shared" / plugin_slug
+        target_dir = shared_root / f"v{normalized_version}"
+        major_dir = shared_root / f"v{major}"
+
+        if not target_dir.exists() or target_dir == major_dir:
+            return
+
+        try:
+            if major_dir.exists() or major_dir.is_symlink():
+                try:
+                    if major_dir.resolve() == target_dir.resolve():
+                        return
+                except Exception:
+                    pass
+
+                if major_dir.is_symlink() or major_dir.is_file():
+                    major_dir.unlink()
+                else:
+                    shutil.rmtree(major_dir)
+
+            major_dir.symlink_to(target_dir, target_is_directory=True)
+        except Exception:
+            if major_dir.exists() or major_dir.is_symlink():
+                if major_dir.is_symlink() or major_dir.is_file():
+                    major_dir.unlink()
+                else:
+                    shutil.rmtree(major_dir)
+            shutil.copytree(target_dir, major_dir, dirs_exist_ok=True)
 
     def _parse_repo_url(self, url: str) -> Optional[Dict[str, str]]:
         """Parse GitHub repository URL to extract owner and repo name"""

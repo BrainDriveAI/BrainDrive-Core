@@ -11,6 +11,7 @@ Now includes remote plugin installation from GitHub repositories.
 
 from fastapi import APIRouter, HTTPException, Depends, status, File, UploadFile, Form, Body, BackgroundTasks, Request
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
 from typing import Dict, Any, Optional, Union
 from pathlib import Path
 import importlib.util
@@ -23,6 +24,8 @@ from pydantic import BaseModel
 
 # Import the remote installer
 from .remote_installer import RemotePluginInstaller, install_plugin_from_url
+from .route_loader import get_plugin_loader
+from app.models.plugin import Plugin
 
 logger = structlog.get_logger()
 
@@ -108,6 +111,77 @@ def _get_error_suggestions(step: str, error_message: str) -> list:
         ])
 
     return suggestions
+
+
+def _normalize_plugin_type(plugin_type: Optional[str]) -> str:
+    return str(plugin_type or "").strip().lower()
+
+
+def _is_backend_plugin_type(plugin_type: Optional[str]) -> bool:
+    return _normalize_plugin_type(plugin_type) in {"backend", "fullstack"}
+
+
+def plugin_slug_from_repo(repo_url: str) -> str:
+    slug = str(repo_url or "").rstrip("/").split("/")[-1]
+    if slug.endswith(".git"):
+        slug = slug[:-4]
+    return slug
+
+
+async def _resolve_plugin_type(
+    db: AsyncSession,
+    *,
+    user_id: str,
+    plugin_slug: str,
+    plugin_type_hint: Optional[str] = None,
+) -> Optional[str]:
+    if _is_backend_plugin_type(plugin_type_hint):
+        return plugin_type_hint
+
+    result = await db.execute(
+        select(Plugin).where(
+            Plugin.user_id == user_id,
+            Plugin.plugin_slug == plugin_slug,
+        )
+    )
+    plugin = result.scalar_one_or_none()
+    if not plugin:
+        return plugin_type_hint
+
+    return plugin.type or plugin.plugin_type or plugin_type_hint
+
+
+async def _reload_routes_if_backend_plugin(
+    db: AsyncSession,
+    *,
+    user_id: str,
+    plugin_slug: str,
+    plugin_type_hint: Optional[str] = None,
+) -> None:
+    resolved_type = plugin_type_hint
+    try:
+        resolved_type = await _resolve_plugin_type(
+            db,
+            user_id=user_id,
+            plugin_slug=plugin_slug,
+            plugin_type_hint=plugin_type_hint,
+        )
+        if not _is_backend_plugin_type(resolved_type):
+            return
+
+        await get_plugin_loader().reload_routes(db)
+        logger.info(
+            "Reloaded plugin endpoint routes after lifecycle operation",
+            plugin_slug=plugin_slug,
+            plugin_type=resolved_type,
+        )
+    except Exception as exc:
+        logger.warning(
+            "Failed to reload plugin endpoint routes",
+            plugin_slug=plugin_slug,
+            plugin_type=resolved_type,
+            error=str(exc),
+        )
 
 # Pydantic models for request/response
 class RemoteInstallRequest(BaseModel):
@@ -625,6 +699,13 @@ async def install_plugin(
         result = await universal_manager.install_plugin(plugin_slug, auth.user_id, db)
 
         if result['success']:
+            await _reload_routes_if_backend_plugin(
+                db,
+                user_id=auth.user_id,
+                plugin_slug=plugin_slug,
+                plugin_type_hint=result.get("plugin_type", "frontend"),
+            )
+
             # Log successful plugin installation
             _log_plugin_audit_background(
                 request, "plugin.installed", auth.user_id,
@@ -668,9 +749,23 @@ async def uninstall_plugin(
     try:
         logger.info(f"Plugin uninstallation requested: {plugin_slug} by user {auth.user_id}")
 
+        plugin_type_before_delete = await _resolve_plugin_type(
+            db,
+            user_id=auth.user_id,
+            plugin_slug=plugin_slug,
+            plugin_type_hint=None,
+        )
+
         result = await universal_manager.delete_plugin(plugin_slug, auth.user_id, db)
 
         if result['success']:
+            await _reload_routes_if_backend_plugin(
+                db,
+                user_id=auth.user_id,
+                plugin_slug=plugin_slug,
+                plugin_type_hint=plugin_type_before_delete,
+            )
+
             # Log successful plugin uninstallation
             _log_plugin_audit_background(
                 request, "plugin.uninstalled", auth.user_id,
@@ -997,8 +1092,16 @@ async def install_plugin_unified(
                 user_id=auth.user_id,
                 version=version or "latest"
             )
-            
+
             if result['success']:
+                installed_slug = result.get("plugin_slug") or plugin_slug_from_repo(repo_url)
+                await _reload_routes_if_backend_plugin(
+                    db,
+                    user_id=auth.user_id,
+                    plugin_slug=installed_slug,
+                    plugin_type_hint=result.get("plugin_type", "frontend"),
+                )
+
                 return {
                     "status": "success",
                     "message": f"Plugin installed successfully from {repo_url}",
@@ -1080,8 +1183,17 @@ async def install_plugin_unified(
                     user_id=auth.user_id,
                     filename=filename
                 )
-                
+
                 if result['success']:
+                    installed_slug = result.get("plugin_slug")
+                    if installed_slug:
+                        await _reload_routes_if_backend_plugin(
+                            db,
+                            user_id=auth.user_id,
+                            plugin_slug=installed_slug,
+                            plugin_type_hint=result.get("plugin_type", "frontend"),
+                        )
+
                     return {
                         "status": "success",
                         "message": f"Plugin '{filename}' installed successfully from local file",
@@ -1160,6 +1272,14 @@ async def install_plugin_from_repository(
         logger.info(f"Remote installer result: {result}")
 
         if result['success']:
+            installed_slug = result.get("plugin_slug") or plugin_slug_from_repo(request.repo_url)
+            await _reload_routes_if_backend_plugin(
+                db,
+                user_id=auth.user_id,
+                plugin_slug=installed_slug,
+                plugin_type_hint=result.get("plugin_type", "frontend"),
+            )
+
             logger.info(f"Plugin installation successful for user {auth.user_id}")
 
             # Get plugin name for display, fallback to slug if name not available
@@ -1250,9 +1370,6 @@ async def update_plugin(
         logger.info(f"Plugin update requested: {plugin_slug} by user {auth.user_id}")
 
         # Get plugin information from database to check if it has a source URL
-        from app.models.plugin import Plugin
-        from sqlalchemy import select
-
         # Find the plugin by slug for this user
         stmt = select(Plugin).where(
             Plugin.plugin_slug == plugin_slug,
@@ -1279,6 +1396,13 @@ async def update_plugin(
         logger.info(f"Update result: {result}")
 
         if result['success']:
+            await _reload_routes_if_backend_plugin(
+                db,
+                user_id=auth.user_id,
+                plugin_slug=plugin_slug,
+                plugin_type_hint=plugin.type,
+            )
+
             # Log successful plugin update
             _log_plugin_audit_background(
                 request, "plugin.updated", auth.user_id,
@@ -1300,6 +1424,13 @@ async def update_plugin(
         else:
             # For updates, "Plugin already installed" is actually success
             if 'already installed' in result.get('error', '').lower():
+                await _reload_routes_if_backend_plugin(
+                    db,
+                    user_id=auth.user_id,
+                    plugin_slug=plugin_slug,
+                    plugin_type_hint=plugin.type,
+                )
+
                 # Log successful plugin update
                 _log_plugin_audit_background(
                     request, "plugin.updated", auth.user_id,
