@@ -155,13 +155,21 @@ class OpenAIProvider(AIProvider):
             )
             
             async for chunk in stream:
-                if chunk.choices and chunk.choices[0].text:
+                if not chunk.choices:
+                    continue
+
+                choice = chunk.choices[0]
+                chunk_text = choice.text or ""
+                finish_reason = choice.finish_reason
+
+                # Emit terminal finish chunks even when content is empty.
+                if chunk_text or finish_reason is not None:
                     yield {
-                        "text": chunk.choices[0].text,
+                        "text": chunk_text,
                         "provider": "openai",
                         "model": model,
-                        "finish_reason": chunk.choices[0].finish_reason,
-                        "done": chunk.choices[0].finish_reason is not None,
+                        "finish_reason": finish_reason,
+                        "done": finish_reason is not None,
                         "metadata": {
                             "id": chunk.id
                         }
@@ -296,29 +304,39 @@ class OpenAIProvider(AIProvider):
             )
             
             async for chunk in stream:
-                if chunk.choices and chunk.choices[0].delta.content:
+                if not chunk.choices:
+                    continue
+
+                choice = chunk.choices[0]
+                delta = choice.delta
+                content = getattr(delta, "content", None) or ""
+                role = getattr(delta, "role", None)
+                finish_reason = choice.finish_reason
+
+                # Emit terminal finish chunks even when content is empty.
+                if content or finish_reason is not None or role is not None:
                     chunk_data = {
-                        "text": chunk.choices[0].delta.content,
+                        "text": content,
                         "provider": "openai",
                         "model": model,
-                        "finish_reason": chunk.choices[0].finish_reason,
-                        "done": chunk.choices[0].finish_reason is not None,
+                        "finish_reason": finish_reason,
+                        "done": finish_reason is not None,
                         "metadata": {
                             "id": chunk.id
                         }
                     }
-                    
+
                     # Add chat-specific fields
                     chunk_data["choices"] = [
                         {
                             "delta": {
-                                "role": chunk.choices[0].delta.role if hasattr(chunk.choices[0].delta, "role") else None,
-                                "content": chunk.choices[0].delta.content
+                                "role": role,
+                                "content": content
                             },
-                            "finish_reason": chunk.choices[0].finish_reason
+                            "finish_reason": finish_reason
                         }
                     ]
-                    
+
                     yield chunk_data
         except Exception as e:
             yield {
