@@ -67,22 +67,20 @@ def _is_version_newer(version1: str, version2: str) -> bool:
         logger.error(f"Error comparing versions {version1} vs {version2}: {e}")
         return False
 
-# Initialize plugin manager on startup
-@router.on_event("startup")
-async def startup_event():
-    """Initialize plugin manager on startup."""
+async def initialize_plugin_manager_on_startup() -> None:
+    """Initialize plugin manager and discover plugin metadata for all users."""
     await plugin_manager.initialize()
-    
+
     # Discover plugins for all users
     async for db in get_db():
         # Get all users
         result = await db.execute(select(User))
         users = result.scalars().all()
-        
+
         # Discover plugins for each user
         for user in users:
             await plugin_manager._discover_plugins(user_id=user.id)
-        
+
         break  # Only need one session
 
 @router.get("/plugins/manifest")

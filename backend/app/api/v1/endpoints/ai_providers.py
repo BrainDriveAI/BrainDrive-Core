@@ -7,11 +7,12 @@ import time
 import asyncio
 import logging
 import traceback
+from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional
 from fastapi import APIRouter, HTTPException, Depends, Body, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import text
+from sqlalchemy import text, select
 from app.core.database import get_db
 from app.core.auth_deps import require_user, optional_user
 from app.core.auth_context import AuthContext
@@ -28,6 +29,7 @@ from app.schemas.ai_providers import (
     ValidationRequest,
 )
 from app.utils.persona_utils import apply_persona_prompt_and_params
+from app.services.mcp_registry_service import MCPRegistryService
 
 # Flag to enable/disable test routes (set to False in production)
 TEST_ROUTES_ENABLED = os.getenv("ENABLE_TEST_ROUTES", "True").lower() == "true"
@@ -87,6 +89,220 @@ def extract_chunk_content(chunk: Dict[str, Any]) -> str:
             return choice_text
 
     return ""
+
+
+def extract_response_content(result: Dict[str, Any]) -> str:
+    """Extract assistant text from a non-stream provider response."""
+    if not isinstance(result, dict):
+        return ""
+
+    choices = result.get("choices")
+    if isinstance(choices, list) and choices:
+        first_choice = choices[0] if isinstance(choices[0], dict) else {}
+        message = first_choice.get("message")
+        if isinstance(message, dict):
+            content = message.get("content")
+            if isinstance(content, str):
+                return content
+        text_value = first_choice.get("text")
+        if isinstance(text_value, str):
+            return text_value
+
+    direct_content = result.get("content")
+    if isinstance(direct_content, str):
+        return direct_content
+
+    direct_text = result.get("text")
+    if isinstance(direct_text, str):
+        return direct_text
+
+    message = result.get("message")
+    if isinstance(message, dict):
+        content = message.get("content")
+        if isinstance(content, str):
+            return content
+
+    return ""
+
+
+def _decode_tool_arguments(raw_arguments: Any) -> Dict[str, Any]:
+    if isinstance(raw_arguments, dict):
+        return raw_arguments
+    if isinstance(raw_arguments, str):
+        raw = raw_arguments.strip()
+        if not raw:
+            return {}
+        try:
+            parsed = json.loads(raw)
+            return parsed if isinstance(parsed, dict) else {}
+        except Exception:
+            return {}
+    return {}
+
+
+def extract_response_tool_calls(result: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Normalize tool call payloads from provider responses."""
+    if not isinstance(result, dict):
+        return []
+
+    candidates: List[Dict[str, Any]] = []
+
+    top_level = result.get("tool_calls")
+    if isinstance(top_level, list):
+        candidates.extend([item for item in top_level if isinstance(item, dict)])
+
+    message = result.get("message")
+    if isinstance(message, dict) and isinstance(message.get("tool_calls"), list):
+        candidates.extend(
+            [item for item in message.get("tool_calls", []) if isinstance(item, dict)]
+        )
+
+    choices = result.get("choices")
+    if isinstance(choices, list) and choices:
+        first_choice = choices[0] if isinstance(choices[0], dict) else {}
+        choice_message = first_choice.get("message")
+        if isinstance(choice_message, dict) and isinstance(choice_message.get("tool_calls"), list):
+            candidates.extend(
+                [item for item in choice_message.get("tool_calls", []) if isinstance(item, dict)]
+            )
+
+    normalized_calls: List[Dict[str, Any]] = []
+    for call in candidates:
+        function = call.get("function") if isinstance(call.get("function"), dict) else {}
+        name = function.get("name") or call.get("name")
+        if not isinstance(name, str) or not name.strip():
+            continue
+
+        raw_arguments = function.get("arguments")
+        if raw_arguments is None:
+            raw_arguments = call.get("arguments")
+        arguments = _decode_tool_arguments(raw_arguments)
+        normalized_calls.append(
+            {
+                "id": call.get("id"),
+                "name": name.strip(),
+                "arguments": arguments,
+                "raw_arguments": raw_arguments,
+            }
+        )
+
+    return normalized_calls
+
+
+def extract_chunk_tool_call_deltas(chunk: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Extract tool-call deltas from a streaming chunk."""
+    if not isinstance(chunk, dict):
+        return []
+
+    candidates: List[Dict[str, Any]] = []
+
+    top_level = chunk.get("tool_calls")
+    if isinstance(top_level, list):
+        candidates.extend([item for item in top_level if isinstance(item, dict)])
+
+    choices = chunk.get("choices")
+    if isinstance(choices, list) and choices:
+        first_choice = choices[0] if isinstance(choices[0], dict) else {}
+        delta = first_choice.get("delta")
+        if isinstance(delta, dict) and isinstance(delta.get("tool_calls"), list):
+            candidates.extend(
+                [item for item in delta.get("tool_calls", []) if isinstance(item, dict)]
+            )
+        message = first_choice.get("message")
+        if isinstance(message, dict) and isinstance(message.get("tool_calls"), list):
+            candidates.extend(
+                [item for item in message.get("tool_calls", []) if isinstance(item, dict)]
+            )
+
+    normalized: List[Dict[str, Any]] = []
+    for item in candidates:
+        function = item.get("function") if isinstance(item.get("function"), dict) else {}
+        normalized.append(
+            {
+                "id": item.get("id"),
+                "index": item.get("index"),
+                "name": function.get("name") or item.get("name"),
+                "arguments": function.get("arguments", item.get("arguments")),
+            }
+        )
+    return normalized
+
+
+def update_stream_tool_call_buffer(
+    buffer: Dict[str, Dict[str, Any]],
+    deltas: List[Dict[str, Any]],
+) -> None:
+    for delta in deltas:
+        raw_key = delta.get("id")
+        if not isinstance(raw_key, str) or not raw_key.strip():
+            index_value = delta.get("index")
+            if isinstance(index_value, int):
+                raw_key = f"idx:{index_value}"
+            else:
+                raw_key = f"idx:{len(buffer)}"
+
+        entry = buffer.get(raw_key)
+        if entry is None:
+            entry = {
+                "id": delta.get("id"),
+                "index": delta.get("index"),
+                "name": None,
+                "arguments_buffer": "",
+                "arguments_object": None,
+            }
+            buffer[raw_key] = entry
+
+        name = delta.get("name")
+        if isinstance(name, str) and name.strip():
+            entry["name"] = name.strip()
+
+        arguments = delta.get("arguments")
+        if isinstance(arguments, str):
+            entry["arguments_buffer"] += arguments
+        elif isinstance(arguments, dict):
+            existing_object = entry.get("arguments_object")
+            if isinstance(existing_object, dict):
+                existing_object.update(arguments)
+                entry["arguments_object"] = existing_object
+            else:
+                entry["arguments_object"] = dict(arguments)
+
+
+def finalize_stream_tool_calls(buffer: Dict[str, Dict[str, Any]]) -> List[Dict[str, Any]]:
+    records = list(buffer.values())
+    records.sort(
+        key=lambda item: (
+            item.get("index") if isinstance(item.get("index"), int) else 10_000,
+            item.get("id") or "",
+        )
+    )
+
+    finalized: List[Dict[str, Any]] = []
+    for item in records:
+        name = item.get("name")
+        if not isinstance(name, str) or not name.strip():
+            continue
+
+        arguments: Dict[str, Any] = {}
+        buffer_text = item.get("arguments_buffer")
+        if isinstance(buffer_text, str) and buffer_text.strip():
+            parsed = _decode_tool_arguments(buffer_text)
+            if isinstance(parsed, dict):
+                arguments = parsed
+
+        if not arguments and isinstance(item.get("arguments_object"), dict):
+            arguments = dict(item["arguments_object"])
+
+        finalized.append(
+            {
+                "id": item.get("id"),
+                "name": name.strip(),
+                "arguments": arguments,
+                "raw_arguments": buffer_text or item.get("arguments_object"),
+            }
+        )
+
+    return finalized
 
 
 def is_truncation_finish_reason(
@@ -160,6 +376,116 @@ def _as_int(value: Any, default: int, minimum: int, maximum: int) -> int:
     except (TypeError, ValueError):
         parsed = default
     return max(minimum, min(maximum, parsed))
+
+
+def _normalize_scope_mode(value: Any) -> str:
+    if not isinstance(value, str):
+        return "none"
+    normalized = value.strip().lower()
+    if normalized in {"none", "project"}:
+        return normalized
+    return "none"
+
+
+def _extract_mcp_scope_params(params: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Extract MCP request-contract fields from provider params.
+    These values are local orchestration controls and are not sent to model providers directly.
+    """
+    extracted: Dict[str, Any] = {
+        "mcp_tools_enabled": _as_bool(params.pop("mcp_tools_enabled", False), False),
+        "mcp_scope_mode": _normalize_scope_mode(params.pop("mcp_scope_mode", "none")),
+        "mcp_project_slug": params.pop("mcp_project_slug", None),
+        "mcp_project_name": params.pop("mcp_project_name", None),
+        "mcp_project_lifecycle": params.pop("mcp_project_lifecycle", None),
+        "mcp_project_source": params.pop("mcp_project_source", "ui"),
+        "mcp_plugin_slug": params.pop("mcp_plugin_slug", None),
+        "mcp_sync_on_request": _as_bool(params.pop("mcp_sync_on_request", True), True),
+        "mcp_max_tools": _as_int(params.pop("mcp_max_tools", 32), default=32, minimum=1, maximum=128),
+        "mcp_max_schema_bytes": _as_int(
+            params.pop("mcp_max_schema_bytes", 128_000),
+            default=128_000,
+            minimum=2_048,
+            maximum=500_000,
+        ),
+    }
+    return extracted
+
+
+def _normalize_approval_action(value: Any) -> Optional[str]:
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip().lower()
+    if normalized in {"approve", "approved", "allow", "yes"}:
+        return "approve"
+    if normalized in {"reject", "rejected", "deny", "denied", "no"}:
+        return "reject"
+    return None
+
+
+def _extract_mcp_approval_params(params: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Extract explicit approval-resume controls from params.
+    Supports both flat keys and nested `mcp_approval` object.
+    """
+    nested_raw = params.pop("mcp_approval", None)
+    nested = nested_raw if isinstance(nested_raw, dict) else {}
+
+    action = _normalize_approval_action(
+        nested.get("action", params.pop("mcp_approval_action", None))
+    )
+    request_id = nested.get("request_id", params.pop("mcp_approval_request_id", None))
+    tool = nested.get("tool", params.pop("mcp_approval_tool", None))
+    arguments = nested.get("arguments", params.pop("mcp_approval_arguments", None))
+    if not isinstance(arguments, dict):
+        arguments = None
+
+    if not isinstance(request_id, str) or not request_id.strip():
+        request_id = None
+    if not isinstance(tool, str) or not tool.strip():
+        tool = None
+
+    return {
+        "action": action,
+        "request_id": request_id.strip() if isinstance(request_id, str) else None,
+        "tool": tool.strip() if isinstance(tool, str) else None,
+        "arguments": arguments,
+    }
+
+
+def _utc_timestamp() -> str:
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+
+
+def _build_approval_request_payload(
+    *,
+    tool: str,
+    safety_class: str,
+    arguments: Dict[str, Any],
+    summary: Optional[str] = None,
+    request_id: Optional[str] = None,
+    scope: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    payload: Dict[str, Any] = {
+        "type": "approval_request",
+        "request_id": request_id or f"apr_{int(time.time() * 1000)}",
+        "tool": tool,
+        "safety_class": safety_class,
+        "summary": summary or f"Approval required to run mutating tool '{tool}'.",
+        "arguments": arguments,
+        "status": "pending",
+        "created_at": _utc_timestamp(),
+    }
+    if isinstance(scope, dict) and scope:
+        payload["scope"] = {
+            "mcp_scope_mode": scope.get("mcp_scope_mode"),
+            "mcp_project_slug": scope.get("mcp_project_slug"),
+            "mcp_project_name": scope.get("mcp_project_name"),
+            "mcp_project_lifecycle": scope.get("mcp_project_lifecycle"),
+            "mcp_project_source": scope.get("mcp_project_source"),
+            "mcp_plugin_slug": scope.get("mcp_plugin_slug"),
+        }
+    return payload
 
 
 # Helper function to get provider instance from request
@@ -1463,6 +1789,268 @@ async def chat_completion(request: ChatCompletionRequest, db: AsyncSession = Dep
             provider_params = enhanced_params.copy()
             provider_params.pop("document_context_mode", None)
 
+            # Extract explicit approval-resume controls before provider/tool params are finalized.
+            approval_controls = _extract_mcp_approval_params(provider_params)
+
+            # Extract MCP scope/tool flags from provider params (server-side orchestration contract).
+            mcp_scope = _extract_mcp_scope_params(provider_params)
+            mcp_tooling_metadata: Dict[str, Any] = {
+                "mcp_tools_enabled": bool(mcp_scope.get("mcp_tools_enabled")),
+                "mcp_scope_mode": mcp_scope.get("mcp_scope_mode"),
+                "mcp_project_slug": mcp_scope.get("mcp_project_slug"),
+                "mcp_project_name": mcp_scope.get("mcp_project_name"),
+                "mcp_project_lifecycle": mcp_scope.get("mcp_project_lifecycle"),
+                "mcp_project_source": mcp_scope.get("mcp_project_source"),
+                "available_count": 0,
+                "selected_count": 0,
+            }
+
+            approval_resume_context: Optional[Dict[str, Any]] = None
+            approval_action = approval_controls.get("action")
+            if approval_action:
+                if not conversation_id:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="mcp_approval requires an existing conversation_id",
+                    )
+
+                pending_query = (
+                    select(Message)
+                    .where(
+                        Message.conversation_id == conversation.id,
+                        Message.sender == "llm",
+                    )
+                    .order_by(Message.created_at.desc())
+                    .limit(50)
+                )
+                pending_result = await db.execute(pending_query)
+                pending_messages = pending_result.scalars().all()
+                pending_message: Optional[Any] = None
+                pending_request: Optional[Dict[str, Any]] = None
+
+                requested_id = approval_controls.get("request_id")
+                requested_tool = approval_controls.get("tool")
+
+                for candidate in pending_messages:
+                    candidate_meta = (
+                        candidate.message_metadata
+                        if isinstance(candidate.message_metadata, dict)
+                        else {}
+                    )
+                    candidate_mcp = (
+                        candidate_meta.get("mcp")
+                        if isinstance(candidate_meta.get("mcp"), dict)
+                        else {}
+                    )
+                    candidate_request = candidate_mcp.get("approval_request")
+                    if not isinstance(candidate_request, dict):
+                        continue
+
+                    candidate_status = str(
+                        candidate_request.get("status") or "pending"
+                    ).lower()
+                    if candidate_status in {
+                        "approved",
+                        "rejected",
+                        "denied",
+                        "cancelled",
+                        "canceled",
+                    }:
+                        continue
+
+                    candidate_request_id = candidate_request.get("request_id")
+                    if not isinstance(candidate_request_id, str) or not candidate_request_id.strip():
+                        candidate_request_id = f"apr_{candidate.id}"
+                        candidate_request["request_id"] = candidate_request_id
+
+                    if requested_id and candidate_request_id != requested_id:
+                        continue
+                    if requested_tool and candidate_request.get("tool") != requested_tool:
+                        continue
+
+                    pending_message = candidate
+                    pending_request = candidate_request
+                    break
+
+                if pending_message is None or pending_request is None:
+                    raise HTTPException(
+                        status_code=409,
+                        detail="No pending approval request found for this conversation.",
+                    )
+
+                pending_tool = pending_request.get("tool")
+                if not isinstance(pending_tool, str) or not pending_tool.strip():
+                    raise HTTPException(
+                        status_code=409,
+                        detail="Pending approval request is missing tool metadata.",
+                    )
+
+                pending_arguments = pending_request.get("arguments")
+                if not isinstance(pending_arguments, dict):
+                    pending_arguments = {}
+
+                override_arguments = approval_controls.get("arguments")
+                effective_arguments = (
+                    override_arguments if isinstance(override_arguments, dict) else pending_arguments
+                )
+
+                resolved_request_id = str(pending_request.get("request_id"))
+                resolution_status = "approved" if approval_action == "approve" else "rejected"
+                pending_request.update(
+                    {
+                        "status": resolution_status,
+                        "resolved_at": _utc_timestamp(),
+                        "resolution_source": "client",
+                        "resolution_message": (
+                            current_messages[-1].get("content")
+                            if current_messages and isinstance(current_messages[-1], dict)
+                            else None
+                        ),
+                    }
+                )
+
+                pending_meta = (
+                    pending_message.message_metadata
+                    if isinstance(pending_message.message_metadata, dict)
+                    else {}
+                )
+                pending_mcp = (
+                    pending_meta.get("mcp")
+                    if isinstance(pending_meta.get("mcp"), dict)
+                    else {}
+                )
+                pending_mcp["approval_request"] = pending_request
+                pending_meta["mcp"] = pending_mcp
+                pending_message.message_metadata = pending_meta
+                await db.commit()
+
+                approval_resume_context = {
+                    "action": approval_action,
+                    "request_id": resolved_request_id,
+                    "tool": pending_tool.strip(),
+                    "arguments": effective_arguments,
+                    "safety_class": pending_request.get("safety_class") or "mutating",
+                    "summary": pending_request.get("summary"),
+                    "scope": pending_request.get("scope")
+                    if isinstance(pending_request.get("scope"), dict)
+                    else {},
+                }
+                mcp_tooling_metadata.update(
+                    {
+                        "approval_resume_action": approval_action,
+                        "approval_resume_request_id": resolved_request_id,
+                        "approval_resume_tool": pending_tool.strip(),
+                    }
+                )
+
+                # If client omitted scope in resume request, reuse stored scope from original approval.
+                pending_scope = approval_resume_context.get("scope") or {}
+                if (
+                    approval_action == "approve"
+                    and str(mcp_scope.get("mcp_scope_mode")) != "project"
+                    and isinstance(pending_scope, dict)
+                    and pending_scope.get("mcp_project_slug")
+                ):
+                    mcp_scope.update(
+                        {
+                            "mcp_tools_enabled": True,
+                            "mcp_scope_mode": "project",
+                            "mcp_project_slug": pending_scope.get("mcp_project_slug"),
+                            "mcp_project_name": pending_scope.get("mcp_project_name"),
+                            "mcp_project_lifecycle": pending_scope.get("mcp_project_lifecycle"),
+                            "mcp_project_source": pending_scope.get("mcp_project_source") or "ui",
+                            "mcp_plugin_slug": pending_scope.get("mcp_plugin_slug"),
+                        }
+                    )
+                    mcp_tooling_metadata.update(
+                        {
+                            "mcp_tools_enabled": True,
+                            "mcp_scope_mode": "project",
+                            "mcp_project_slug": pending_scope.get("mcp_project_slug"),
+                            "mcp_project_name": pending_scope.get("mcp_project_name"),
+                            "mcp_project_lifecycle": pending_scope.get("mcp_project_lifecycle"),
+                            "mcp_project_source": pending_scope.get("mcp_project_source") or "ui",
+                        }
+                    )
+
+            resolved_tools: List[Dict[str, Any]] = []
+            if bool(mcp_scope.get("mcp_tools_enabled")) and str(mcp_scope.get("mcp_scope_mode")) == "project":
+                mcp_service = MCPRegistryService(db)
+                mcp_user_id = user_id or "current"
+
+                if bool(mcp_scope.get("mcp_sync_on_request")) and mcp_user_id != "current":
+                    try:
+                        await mcp_service.sync_user_servers(
+                            mcp_user_id,
+                            plugin_slug_filter=mcp_scope.get("mcp_plugin_slug"),
+                        )
+                    except Exception as sync_error:
+                        logger.warning(
+                            "mcp_sync_on_request_failed user_id=%s error=%s",
+                            mcp_user_id,
+                            sync_error,
+                        )
+
+                resolved_tools, resolve_meta = await mcp_service.resolve_tools_for_request(
+                    mcp_user_id,
+                    mcp_tools_enabled=bool(mcp_scope.get("mcp_tools_enabled")),
+                    mcp_scope_mode=str(mcp_scope.get("mcp_scope_mode") or "none"),
+                    mcp_project_slug=mcp_scope.get("mcp_project_slug"),
+                    plugin_slug=mcp_scope.get("mcp_plugin_slug"),
+                    max_tools=int(mcp_scope.get("mcp_max_tools") or 32),
+                    max_schema_bytes=int(mcp_scope.get("mcp_max_schema_bytes") or 128_000),
+                )
+                mcp_tooling_metadata.update(resolve_meta)
+
+            if resolved_tools:
+                provider_params["tools"] = resolved_tools
+                provider_params["tool_choice"] = provider_params.get("tool_choice", "auto")
+            else:
+                provider_params.pop("tools", None)
+                if "tool_choice" not in provider_params and bool(mcp_scope.get("mcp_tools_enabled")):
+                    provider_params["tool_choice"] = "none"
+
+            mcp_max_tool_iterations = _as_int(
+                provider_params.pop("mcp_max_tool_iterations", 5),
+                default=5,
+                minimum=1,
+                maximum=10,
+            )
+            mcp_tool_timeout_seconds = float(
+                provider_params.pop("mcp_tool_timeout_seconds", 15.0)
+                or 15.0
+            )
+            if mcp_tool_timeout_seconds < 1:
+                mcp_tool_timeout_seconds = 1.0
+            if mcp_tool_timeout_seconds > 120:
+                mcp_tool_timeout_seconds = 120.0
+
+            mcp_auto_approve_mutating = _as_bool(
+                provider_params.pop("mcp_auto_approve_mutating", False),
+                False,
+            )
+            approved_mutating_raw = provider_params.pop("mcp_approved_mutating_tools", [])
+            if isinstance(approved_mutating_raw, str):
+                approved_mutating_tools = {
+                    item.strip()
+                    for item in approved_mutating_raw.split(",")
+                    if item.strip()
+                }
+            elif isinstance(approved_mutating_raw, list):
+                approved_mutating_tools = {
+                    str(item).strip()
+                    for item in approved_mutating_raw
+                    if str(item).strip()
+                }
+            else:
+                approved_mutating_tools = set()
+            if (
+                approval_resume_context
+                and approval_resume_context.get("action") == "approve"
+                and isinstance(approval_resume_context.get("tool"), str)
+            ):
+                approved_mutating_tools.add(str(approval_resume_context["tool"]))
+
             auto_continue_enabled = _as_bool(provider_params.pop("auto_continue", True), True)
             auto_continue_max_passes = _as_int(
                 provider_params.pop("auto_continue_max_passes", DEFAULT_AUTO_CONTINUE_MAX_PASSES),
@@ -1523,11 +2111,190 @@ async def chat_completion(request: ChatCompletionRequest, db: AsyncSession = Dep
                             # Don't fail the stream if the initial event fails
                             print(f"Warning: failed to emit initial conversation_id event: {init_evt_error}")
 
+                        try:
+                            tooling_evt = {
+                                "type": "tooling_state",
+                                **mcp_tooling_metadata,
+                                "tools_passed_count": len(resolved_tools),
+                            }
+                            yield f"data: {json.dumps(tooling_evt)}\n\n"
+                        except Exception as tooling_evt_error:
+                            print(f"Warning: failed to emit tooling_state event: {tooling_evt_error}")
+
+                        if (
+                            str(mcp_scope.get("mcp_scope_mode")) == "project"
+                            and mcp_scope.get("mcp_project_slug")
+                        ):
+                            try:
+                                scope_evt = {
+                                    "type": "project_scope_selected",
+                                    "project": {
+                                        "slug": mcp_scope.get("mcp_project_slug"),
+                                        "name": mcp_scope.get("mcp_project_name"),
+                                        "lifecycle": mcp_scope.get("mcp_project_lifecycle"),
+                                    },
+                                    "source": mcp_scope.get("mcp_project_source"),
+                                }
+                                yield f"data: {json.dumps(scope_evt)}\n\n"
+                            except Exception as scope_evt_error:
+                                print(f"Warning: failed to emit project_scope_selected event: {scope_evt_error}")
+
                         pass_index = 1
-                        current_messages = combined_messages
+                        loop_messages = list(combined_messages)
+                        tool_loop_iterations = 0
+                        tool_loop_stop_reason = "provider_final_response"
+                        stream_executed_tool_calls: List[Dict[str, Any]] = []
+                        approval_request_payload: Optional[Dict[str, Any]] = None
+                        approval_resolution_payload: Optional[Dict[str, Any]] = None
+                        mcp_runtime_service = MCPRegistryService(
+                            db,
+                            call_timeout_seconds=mcp_tool_timeout_seconds,
+                        )
+
+                        if approval_resume_context and approval_resume_context.get("action") == "reject":
+                            approval_resolution_payload = {
+                                "type": "approval_resolution",
+                                "status": "rejected",
+                                "request_id": approval_resume_context.get("request_id"),
+                                "tool": approval_resume_context.get("tool"),
+                                "summary": approval_resume_context.get("summary"),
+                            }
+                            tool_loop_stop_reason = "approval_rejected"
+                            full_response = (
+                                f"Understood. I did not run mutating tool "
+                                f"'{approval_resume_context.get('tool')}'."
+                            )
+                            finish_reason_final = "stop"
+                            finish_reason_history.append("stop")
+                            token_count += max(1, len(full_response.split()))
+                            reject_chunk = {
+                                "choices": [
+                                    {
+                                        "delta": {
+                                            "role": "assistant",
+                                            "content": full_response,
+                                        },
+                                        "finish_reason": "stop",
+                                    }
+                                ]
+                            }
+                            yield f"data: {json.dumps(reject_chunk)}\n\n"
+                        elif approval_resume_context and approval_resume_context.get("action") == "approve":
+                            resume_tool_name = str(approval_resume_context.get("tool") or "").strip()
+                            resume_tool_arguments = (
+                                approval_resume_context.get("arguments")
+                                if isinstance(approval_resume_context.get("arguments"), dict)
+                                else {}
+                            )
+                            resume_request_id = approval_resume_context.get("request_id")
+                            resume_call_id = (
+                                f"resume_{resume_request_id}"
+                                if isinstance(resume_request_id, str) and resume_request_id
+                                else f"resume_{resume_tool_name}"
+                            )
+                            approval_resolution_payload = {
+                                "type": "approval_resolution",
+                                "status": "approved",
+                                "request_id": resume_request_id,
+                                "tool": resume_tool_name,
+                                "summary": approval_resume_context.get("summary"),
+                            }
+                            if resume_tool_name:
+                                loop_messages.append(
+                                    {
+                                        "role": "assistant",
+                                        "content": "",
+                                        "tool_calls": [
+                                            {
+                                                "id": resume_call_id,
+                                                "type": "function",
+                                                "function": {
+                                                    "name": resume_tool_name,
+                                                    "arguments": json.dumps(
+                                                        resume_tool_arguments,
+                                                        ensure_ascii=True,
+                                                    ),
+                                                },
+                                            }
+                                        ],
+                                    }
+                                )
+                                try:
+                                    resume_tool_evt = {
+                                        "type": "tool_call",
+                                        "name": resume_tool_name,
+                                        "arguments": resume_tool_arguments,
+                                        "resumed": True,
+                                    }
+                                    yield f"data: {json.dumps(resume_tool_evt)}\n\n"
+                                except Exception as resume_evt_error:
+                                    print(f"Warning: failed to emit resumed tool_call event: {resume_evt_error}")
+
+                                execution = await mcp_runtime_service.execute_tool_call(
+                                    user_id or "current",
+                                    resume_tool_name,
+                                    resume_tool_arguments,
+                                )
+                                if execution.get("ok"):
+                                    tool_result_payload = execution.get("data", {})
+                                    stream_executed_tool_calls.append(
+                                        {
+                                            "name": resume_tool_name,
+                                            "status": "success",
+                                            "latency_ms": execution.get("latency_ms"),
+                                            "resumed": True,
+                                        }
+                                    )
+                                else:
+                                    tool_result_payload = {
+                                        "ok": False,
+                                        "error": execution.get("error"),
+                                    }
+                                    stream_executed_tool_calls.append(
+                                        {
+                                            "name": resume_tool_name,
+                                            "status": "error",
+                                            "error": execution.get("error"),
+                                            "resumed": True,
+                                        }
+                                    )
+
+                                loop_messages.append(
+                                    {
+                                        "role": "tool",
+                                        "name": resume_tool_name,
+                                        "content": json.dumps(tool_result_payload, ensure_ascii=True),
+                                    }
+                                )
+                                tool_loop_iterations += 1
+                                try:
+                                    resume_result_evt = {
+                                        "type": "tool_result",
+                                        "name": resume_tool_name,
+                                        "ok": bool(execution.get("ok")),
+                                        "resumed": True,
+                                    }
+                                    yield f"data: {json.dumps(resume_result_evt)}\n\n"
+                                except Exception as resume_result_evt_error:
+                                    print(
+                                        f"Warning: failed to emit resumed tool_result event: {resume_result_evt_error}"
+                                    )
+
+                        if approval_resolution_payload:
+                            try:
+                                yield f"data: {json.dumps(approval_resolution_payload)}\n\n"
+                            except Exception as approval_resolution_evt_error:
+                                print(
+                                    f"Warning: failed to emit approval_resolution event: "
+                                    f"{approval_resolution_evt_error}"
+                                )
+
                         while True:
+                            if tool_loop_stop_reason == "approval_rejected":
+                                break
                             pass_text = ""
                             pass_finish_reason: Optional[str] = None
+                            pass_tool_call_buffer: Dict[str, Dict[str, Any]] = {}
 
                             logger.info(
                                 "chat_stream_pass_start provider=%s model=%s conversation_id=%s pass=%s",
@@ -1538,7 +2305,7 @@ async def chat_completion(request: ChatCompletionRequest, db: AsyncSession = Dep
                             )
 
                             async for chunk in provider_instance.chat_completion_stream(
-                                current_messages,
+                                loop_messages,
                                 request.model,
                                 provider_params
                             ):
@@ -1549,6 +2316,10 @@ async def chat_completion(request: ChatCompletionRequest, db: AsyncSession = Dep
                                 if content:
                                     pass_text += content
                                     full_response += content
+
+                                tool_deltas = extract_chunk_tool_call_deltas(chunk)
+                                if tool_deltas:
+                                    update_stream_tool_call_buffer(pass_tool_call_buffer, tool_deltas)
 
                                 detected_finish_reason = extract_finish_reason(chunk)
                                 if detected_finish_reason:
@@ -1561,6 +2332,7 @@ async def chat_completion(request: ChatCompletionRequest, db: AsyncSession = Dep
                                 # Add an explicit flush marker
                                 yield ""
 
+                            pass_tool_calls = finalize_stream_tool_calls(pass_tool_call_buffer)
                             finish_reason_final = pass_finish_reason
                             finish_reason_history.append(pass_finish_reason or "unknown")
 
@@ -1571,14 +2343,158 @@ async def chat_completion(request: ChatCompletionRequest, db: AsyncSession = Dep
                                 truncated_at_least_once = True
 
                             logger.info(
-                                "chat_stream_pass_end provider=%s model=%s conversation_id=%s pass=%s finish_reason=%s chars=%s",
+                                "chat_stream_pass_end provider=%s model=%s conversation_id=%s pass=%s finish_reason=%s chars=%s tool_calls=%s",
                                 request.provider,
                                 request.model,
                                 conversation.id,
                                 pass_index,
                                 pass_finish_reason,
                                 pass_chars,
+                                len(pass_tool_calls),
                             )
+
+                            if pass_tool_calls and resolved_tools:
+                                tool_loop_iterations += 1
+                                if tool_loop_iterations > mcp_max_tool_iterations:
+                                    tool_loop_stop_reason = "max_tool_iterations_exceeded"
+                                    stopped_by_guardrail = "max_tool_iterations_exceeded"
+                                    break
+
+                                assistant_payload: Dict[str, Any] = {
+                                    "role": "assistant",
+                                    "content": pass_text or "",
+                                    "tool_calls": [
+                                        {
+                                            "id": call.get("id"),
+                                            "type": "function",
+                                            "function": {
+                                                "name": call["name"],
+                                                "arguments": json.dumps(call.get("arguments", {}), ensure_ascii=True),
+                                            },
+                                        }
+                                        for call in pass_tool_calls
+                                    ],
+                                }
+                                loop_messages.append(assistant_payload)
+
+                                executed_any = False
+                                for tool_call in pass_tool_calls:
+                                    tool_name = tool_call["name"]
+                                    tool_arguments = (
+                                        tool_call.get("arguments")
+                                        if isinstance(tool_call.get("arguments"), dict)
+                                        else {}
+                                    )
+                                    try:
+                                        tool_call_event = {
+                                            "type": "tool_call",
+                                            "name": tool_name,
+                                            "arguments": tool_arguments,
+                                        }
+                                        yield f"data: {json.dumps(tool_call_event)}\n\n"
+                                    except Exception as tool_call_evt_error:
+                                        print(f"Warning: failed to emit tool_call event: {tool_call_evt_error}")
+
+                                    tool_record = await mcp_runtime_service.get_enabled_tool(user_id or "current", tool_name)
+                                    if tool_record is None:
+                                        tool_error = {
+                                            "ok": False,
+                                            "error": {
+                                                "code": "TOOL_NOT_ALLOWED",
+                                                "message": f"Tool '{tool_name}' is not enabled.",
+                                            },
+                                        }
+                                        loop_messages.append(
+                                            {
+                                                "role": "tool",
+                                                "name": tool_name,
+                                                "content": json.dumps(tool_error, ensure_ascii=True),
+                                            }
+                                        )
+                                        stream_executed_tool_calls.append(
+                                            {
+                                                "name": tool_name,
+                                                "status": "denied",
+                                                "reason": "tool_not_enabled",
+                                            }
+                                        )
+                                        continue
+
+                                    if (
+                                        tool_record.safety_class == "mutating"
+                                        and not mcp_auto_approve_mutating
+                                        and tool_name not in approved_mutating_tools
+                                    ):
+                                        approval_request_payload = _build_approval_request_payload(
+                                            tool=tool_name,
+                                            safety_class=tool_record.safety_class,
+                                            arguments=tool_arguments,
+                                            scope=mcp_scope,
+                                        )
+                                        tool_loop_stop_reason = "approval_required"
+                                        try:
+                                            yield f"data: {json.dumps(approval_request_payload)}\n\n"
+                                        except Exception as approval_evt_error:
+                                            print(f"Warning: failed to emit approval_request event: {approval_evt_error}")
+                                        break
+
+                                    execution = await mcp_runtime_service.execute_tool_call(
+                                        user_id or "current",
+                                        tool_name,
+                                        tool_arguments,
+                                    )
+                                    executed_any = True
+                                    if execution.get("ok"):
+                                        tool_result_payload = execution.get("data", {})
+                                        stream_executed_tool_calls.append(
+                                            {
+                                                "name": tool_name,
+                                                "status": "success",
+                                                "latency_ms": execution.get("latency_ms"),
+                                            }
+                                        )
+                                    else:
+                                        tool_result_payload = {
+                                            "ok": False,
+                                            "error": execution.get("error"),
+                                        }
+                                        stream_executed_tool_calls.append(
+                                            {
+                                                "name": tool_name,
+                                                "status": "error",
+                                                "error": execution.get("error"),
+                                            }
+                                        )
+
+                                    loop_messages.append(
+                                        {
+                                            "role": "tool",
+                                            "name": tool_name,
+                                            "content": json.dumps(tool_result_payload, ensure_ascii=True),
+                                        }
+                                    )
+                                    try:
+                                        tool_result_event = {
+                                            "type": "tool_result",
+                                            "name": tool_name,
+                                            "ok": bool(execution.get("ok")),
+                                        }
+                                        yield f"data: {json.dumps(tool_result_event)}\n\n"
+                                    except Exception as tool_result_evt_error:
+                                        print(f"Warning: failed to emit tool_result event: {tool_result_evt_error}")
+
+                                if approval_request_payload:
+                                    break
+
+                                if not executed_any:
+                                    tool_loop_stop_reason = "tool_calls_without_execution"
+
+                                pass_index += 1
+                                continue
+
+                            if pass_tool_calls and not resolved_tools:
+                                tool_loop_stop_reason = "tool_calls_without_enabled_tools"
+                                break
 
                             can_continue = (
                                 auto_continue_enabled
@@ -1612,8 +2528,8 @@ async def chat_completion(request: ChatCompletionRequest, db: AsyncSession = Dep
                                 yield f"data: {json.dumps(continuation_event)}\n\n"
                                 yield ""
 
-                                current_messages = build_continuation_messages(
-                                    combined_messages,
+                                loop_messages = build_continuation_messages(
+                                    loop_messages,
                                     full_response,
                                     continuation_prompt=auto_continue_prompt,
                                 )
@@ -1629,6 +2545,17 @@ async def chat_completion(request: ChatCompletionRequest, db: AsyncSession = Dep
                         elapsed_time = time.time() - start_time
                         tokens_per_second = token_count / elapsed_time if elapsed_time > 0 else 0
                         
+                        mcp_tooling_metadata.update(
+                            {
+                                "tool_loop_enabled": bool(resolved_tools) or bool(stream_executed_tool_calls),
+                                "tool_loop_iterations": tool_loop_iterations,
+                                "tool_loop_stop_reason": tool_loop_stop_reason,
+                                "tool_calls_executed_count": len(stream_executed_tool_calls),
+                                "approval_required": bool(approval_request_payload),
+                                "approval_resolved": bool(approval_resolution_payload),
+                            }
+                        )
+
                         # Store the LLM response in the database with persona metadata
                         message_metadata = {
                             "token_count": token_count,
@@ -1642,7 +2569,16 @@ async def chat_completion(request: ChatCompletionRequest, db: AsyncSession = Dep
                             "finish_reason_final": finish_reason_final,
                             "finish_reason_history": finish_reason_history,
                             "truncated_at_least_once": truncated_at_least_once,
+                            "mcp": {
+                                **mcp_tooling_metadata,
+                                "tools_passed_count": len(resolved_tools),
+                                "tool_calls_executed": stream_executed_tool_calls,
+                            },
                         }
+                        if approval_request_payload:
+                            message_metadata["mcp"]["approval_request"] = approval_request_payload
+                        if approval_resolution_payload:
+                            message_metadata["mcp"]["approval_resolution"] = approval_resolution_payload
                         if stopped_by_guardrail:
                             message_metadata["stopped_by_guardrail"] = stopped_by_guardrail
                         
@@ -1667,7 +2603,14 @@ async def chat_completion(request: ChatCompletionRequest, db: AsyncSession = Dep
                         conversation.updated_at = db_message.created_at
                         
                         await db.commit()
-                        
+
+                        if approval_request_payload:
+                            approval_event = {
+                                "type": "approval_required",
+                                "approval_request": approval_request_payload,
+                            }
+                            yield f"data: {json.dumps(approval_event)}\n\n"
+
                         yield "data: [DONE]\n\n"
                     except Exception as stream_error:
                         print(f"Error in stream_generator: {stream_error}")
@@ -1706,35 +2649,313 @@ async def chat_completion(request: ChatCompletionRequest, db: AsyncSession = Dep
             print(f"Sending {len(combined_messages)} messages to chat_completion")
             for i, msg in enumerate(combined_messages):
                 print(f"  Message {i+1}: role={msg.get('role', 'unknown')}, content={msg.get('content', '')[:50]}...")
-            
-            result = await provider_instance.chat_completion(
-                combined_messages,
-                request.model,
-                provider_params
+
+            loop_messages = list(combined_messages)
+            tool_loop_enabled = bool(resolved_tools)
+            tool_loop_iterations = 0
+            tool_loop_stop_reason = "provider_final_response"
+            approval_request_payload: Optional[Dict[str, Any]] = None
+            approval_resolution_payload: Optional[Dict[str, Any]] = None
+            executed_tool_calls: List[Dict[str, Any]] = []
+            result: Dict[str, Any] = {}
+
+            mcp_runtime_service = MCPRegistryService(
+                db,
+                call_timeout_seconds=mcp_tool_timeout_seconds,
             )
-            if isinstance(result, dict) and result.get("error"):
-                raise HTTPException(
-                    status_code=502,
-                    detail=f"Provider error: {result['error']}"
+            if approval_resume_context and approval_resume_context.get("action") == "reject":
+                approval_resolution_payload = {
+                    "type": "approval_resolution",
+                    "status": "rejected",
+                    "request_id": approval_resume_context.get("request_id"),
+                    "tool": approval_resume_context.get("tool"),
+                    "summary": approval_resume_context.get("summary"),
+                }
+                tool_loop_stop_reason = "approval_rejected"
+                result = {
+                    "choices": [
+                        {
+                            "message": {
+                                "role": "assistant",
+                                "content": (
+                                    "Understood. I did not run mutating tool "
+                                    f"'{approval_resume_context.get('tool')}'."
+                                ),
+                            },
+                            "finish_reason": "stop",
+                        }
+                    ]
+                }
+            else:
+                if approval_resume_context and approval_resume_context.get("action") == "approve":
+                    resume_tool_name = str(approval_resume_context.get("tool") or "").strip()
+                    resume_tool_arguments = (
+                        approval_resume_context.get("arguments")
+                        if isinstance(approval_resume_context.get("arguments"), dict)
+                        else {}
+                    )
+                    resume_request_id = approval_resume_context.get("request_id")
+                    resume_call_id = (
+                        f"resume_{resume_request_id}"
+                        if isinstance(resume_request_id, str) and resume_request_id
+                        else f"resume_{resume_tool_name}"
+                    )
+                    approval_resolution_payload = {
+                        "type": "approval_resolution",
+                        "status": "approved",
+                        "request_id": resume_request_id,
+                        "tool": resume_tool_name,
+                        "summary": approval_resume_context.get("summary"),
+                    }
+
+                    if resume_tool_name:
+                        loop_messages.append(
+                            {
+                                "role": "assistant",
+                                "content": "",
+                                "tool_calls": [
+                                    {
+                                        "id": resume_call_id,
+                                        "type": "function",
+                                        "function": {
+                                            "name": resume_tool_name,
+                                            "arguments": json.dumps(
+                                                resume_tool_arguments,
+                                                ensure_ascii=True,
+                                            ),
+                                        },
+                                    }
+                                ],
+                            }
+                        )
+                        execution = await mcp_runtime_service.execute_tool_call(
+                            user_id or "current",
+                            resume_tool_name,
+                            resume_tool_arguments,
+                        )
+                        if execution.get("ok"):
+                            tool_content = execution.get("data", {})
+                            executed_tool_calls.append(
+                                {
+                                    "name": resume_tool_name,
+                                    "status": "success",
+                                    "latency_ms": execution.get("latency_ms"),
+                                    "resumed": True,
+                                }
+                            )
+                        else:
+                            tool_content = {
+                                "ok": False,
+                                "error": execution.get("error"),
+                            }
+                            executed_tool_calls.append(
+                                {
+                                    "name": resume_tool_name,
+                                    "status": "error",
+                                    "error": execution.get("error"),
+                                    "resumed": True,
+                                }
+                            )
+
+                        loop_messages.append(
+                            {
+                                "role": "tool",
+                                "name": resume_tool_name,
+                                "content": json.dumps(tool_content, ensure_ascii=True),
+                            }
+                        )
+                        tool_loop_iterations += 1
+
+                for iteration in range(1, mcp_max_tool_iterations + 1):
+                    tool_loop_iterations = iteration
+                    result = await provider_instance.chat_completion(
+                        loop_messages,
+                        request.model,
+                        provider_params,
+                    )
+                    if isinstance(result, dict) and result.get("error"):
+                        raise HTTPException(
+                            status_code=502,
+                            detail=f"Provider error: {result.get('error') or result.get('message')}",
+                        )
+
+                    tool_calls = extract_response_tool_calls(result)
+                    if not tool_loop_enabled or not tool_calls:
+                        tool_loop_stop_reason = (
+                            "provider_final_response" if not tool_calls else "tools_disabled"
+                        )
+                        break
+
+                    assistant_content = extract_response_content(result)
+                    assistant_payload: Dict[str, Any] = {
+                        "role": "assistant",
+                        "content": assistant_content or "",
+                    }
+                    assistant_payload["tool_calls"] = [
+                        {
+                            "id": call.get("id"),
+                            "type": "function",
+                            "function": {
+                                "name": call["name"],
+                                "arguments": json.dumps(call.get("arguments", {}), ensure_ascii=True),
+                            },
+                        }
+                        for call in tool_calls
+                    ]
+                    loop_messages.append(assistant_payload)
+
+                    executed_in_iteration = False
+                    for tool_call in tool_calls:
+                        tool_name = tool_call["name"]
+                        tool_arguments = (
+                            tool_call.get("arguments")
+                            if isinstance(tool_call.get("arguments"), dict)
+                            else {}
+                        )
+                        tool_record = await mcp_runtime_service.get_enabled_tool(user_id or "current", tool_name)
+                        if tool_record is None:
+                            error_payload = {
+                                "ok": False,
+                                "error": {
+                                    "code": "TOOL_NOT_ALLOWED",
+                                    "message": f"Tool '{tool_name}' is not enabled.",
+                                },
+                            }
+                            loop_messages.append(
+                                {
+                                    "role": "tool",
+                                    "name": tool_name,
+                                    "content": json.dumps(error_payload, ensure_ascii=True),
+                                }
+                            )
+                            executed_tool_calls.append(
+                                {
+                                    "name": tool_name,
+                                    "status": "denied",
+                                    "reason": "tool_not_enabled",
+                                }
+                            )
+                            continue
+
+                        if (
+                            tool_record.safety_class == "mutating"
+                            and not mcp_auto_approve_mutating
+                            and tool_name not in approved_mutating_tools
+                        ):
+                            approval_request_payload = _build_approval_request_payload(
+                                tool=tool_name,
+                                safety_class=tool_record.safety_class,
+                                arguments=tool_arguments,
+                                scope=mcp_scope,
+                            )
+                            tool_loop_stop_reason = "approval_required"
+                            break
+
+                        execution = await mcp_runtime_service.execute_tool_call(
+                            user_id or "current",
+                            tool_name,
+                            tool_arguments,
+                        )
+                        if execution.get("ok"):
+                            tool_content = execution.get("data", {})
+                            executed_tool_calls.append(
+                                {
+                                    "name": tool_name,
+                                    "status": "success",
+                                    "latency_ms": execution.get("latency_ms"),
+                                }
+                            )
+                        else:
+                            tool_content = {
+                                "ok": False,
+                                "error": execution.get("error"),
+                            }
+                            executed_tool_calls.append(
+                                {
+                                    "name": tool_name,
+                                    "status": "error",
+                                    "error": execution.get("error"),
+                                }
+                            )
+
+                        loop_messages.append(
+                            {
+                                "role": "tool",
+                                "name": tool_name,
+                                "content": json.dumps(tool_content, ensure_ascii=True),
+                            }
+                        )
+                        executed_in_iteration = True
+
+                    if approval_request_payload:
+                        break
+
+                    if not executed_in_iteration:
+                        # Tool calls were returned but none could execute; feed tool errors back in next pass.
+                        continue
+                else:
+                    tool_loop_stop_reason = "max_tool_iterations_exceeded"
+
+            if approval_request_payload:
+                response_content = "Approval required before executing mutating tool call."
+                result = {
+                    "choices": [
+                        {
+                            "message": {
+                                "role": "assistant",
+                                "content": response_content,
+                            },
+                            "finish_reason": "tool_calls",
+                        }
+                    ],
+                    "approval_required": True,
+                    "approval_request": approval_request_payload,
+                }
+            elif approval_resolution_payload and approval_resolution_payload.get("status") == "rejected":
+                response_content = (
+                    "Understood. I did not run mutating tool "
+                    f"'{approval_resolution_payload.get('tool')}'."
                 )
+                result = result or {
+                    "choices": [
+                        {
+                            "message": {
+                                "role": "assistant",
+                                "content": response_content,
+                            },
+                            "finish_reason": "stop",
+                        }
+                    ]
+                }
+            else:
+                response_content = extract_response_content(result)
+                if not response_content and tool_loop_stop_reason == "max_tool_iterations_exceeded":
+                    response_content = "Tool execution stopped after reaching max iterations."
+                    result = result or {
+                        "choices": [
+                            {
+                                "message": {
+                                    "role": "assistant",
+                                    "content": response_content,
+                                },
+                                "finish_reason": "length",
+                            }
+                        ]
+                    }
+
+            mcp_tooling_metadata.update(
+                {
+                    "tool_loop_enabled": tool_loop_enabled or bool(executed_tool_calls),
+                    "tool_loop_iterations": tool_loop_iterations,
+                    "tool_loop_stop_reason": tool_loop_stop_reason,
+                    "tool_calls_executed_count": len(executed_tool_calls),
+                    "approval_required": bool(approval_request_payload),
+                    "approval_resolved": bool(approval_resolution_payload),
+                }
+            )
+
             elapsed_time = time.time() - start_time
-            
             print(f"Chat completion result: {result}")
-            
-            # Extract the response content
-            response_content = ""
-            if "choices" in result and len(result["choices"]) > 0:
-                if "message" in result["choices"][0]:
-                    response_content = result["choices"][0]["message"].get("content", "")
-                elif "text" in result["choices"][0]:
-                    response_content = result["choices"][0]["text"]
-            if not response_content and isinstance(result, dict):
-                if isinstance(result.get("content"), str):
-                    response_content = result["content"]
-                elif isinstance(result.get("message"), dict):
-                    response_content = result["message"].get("content", "")
-                elif isinstance(result.get("text"), str):
-                    response_content = result["text"]
             
             # Estimate token count (this is a rough estimate)
             token_count = len(response_content.split()) * 1.3  # Rough estimate: words * 1.3
@@ -1746,8 +2967,17 @@ async def chat_completion(request: ChatCompletionRequest, db: AsyncSession = Dep
                 "tokens_per_second": round(tokens_per_second, 1),
                 "model": request.model,
                 "temperature": provider_params.get("temperature", 0.7),
-                "streaming": False
+                "streaming": False,
+                "mcp": {
+                    **mcp_tooling_metadata,
+                    "tools_passed_count": len(resolved_tools),
+                    "tool_calls_executed": executed_tool_calls,
+                },
             }
+            if approval_request_payload:
+                message_metadata["mcp"]["approval_request"] = approval_request_payload
+            if approval_resolution_payload:
+                message_metadata["mcp"]["approval_resolution"] = approval_resolution_payload
             
             # Add persona metadata if persona was used
             if request.persona_id:
@@ -1773,6 +3003,15 @@ async def chat_completion(request: ChatCompletionRequest, db: AsyncSession = Dep
             
             # Add conversation_id to the result
             result["conversation_id"] = conversation.id
+            result["tooling_state"] = {
+                **mcp_tooling_metadata,
+                "tools_passed_count": len(resolved_tools),
+            }
+            if approval_request_payload:
+                result["approval_required"] = True
+                result["approval_request"] = approval_request_payload
+            if approval_resolution_payload:
+                result["approval_resolution"] = approval_resolution_payload
             
             return result
     except HTTPException:

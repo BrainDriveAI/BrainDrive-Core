@@ -14,6 +14,7 @@ from app.models.plugin_state import PluginState, PluginStateHistory, PluginState
 from app.models.persona import Persona
 from app.models.settings import SettingDefinition, SettingInstance
 from app.models.message import Message
+from app.models.mcp import MCPServerRegistry, MCPToolRegistry
 from app.models.role import Role
 from app.models.tenant_models import (
     Tenant,

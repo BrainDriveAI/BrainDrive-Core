@@ -59,6 +59,9 @@ class OllamaProvider(AIProvider):
         print(f"[OLLAMA] Server Name: {self.server_name}")
         print(f"[OLLAMA] Model: {model}")
         print(f"[OLLAMA] Messages: {len(messages)} messages")
+        if isinstance(params.get("tools"), list) and params.get("tools"):
+            return await self._call_ollama_chat_api(messages, model, params)
+
         prompt = self._format_chat_messages(messages)
         
         result = await self._call_ollama_api(prompt, model, params, is_streaming=False)
@@ -73,6 +76,11 @@ class OllamaProvider(AIProvider):
         return result
 
     async def chat_completion_stream(self, messages: List[Dict[str, Any]], model: str, params: Dict[str, Any]) -> AsyncGenerator[Dict[str, Any], None]:
+        if isinstance(params.get("tools"), list) and params.get("tools"):
+            async for chunk in self._stream_ollama_chat_api(messages, model, params):
+                yield chunk
+            return
+
         prompt = self._format_chat_messages(messages)
         
         # TODO: implement full cancellation support
@@ -88,6 +96,141 @@ class OllamaProvider(AIProvider):
                     "finish_reason": chunk.get("finish_reason")
                 }]
             yield chunk
+
+    async def _call_ollama_chat_api(self, messages: List[Dict[str, Any]], model: str, params: Dict[str, Any]) -> Dict[str, Any]:
+        import logging
+        logger = logging.getLogger(__name__)
+
+        options = self._build_ollama_options(params)
+        payload = {
+            "model": model,
+            "messages": messages,
+            "stream": False,
+            "options": options,
+        }
+
+        tools = params.get("tools")
+        if isinstance(tools, list) and tools:
+            payload["tools"] = tools
+
+        headers = {'Content-Type': 'application/json'}
+        if self.api_key:
+            headers['Authorization'] = f'Bearer {self.api_key}'
+
+        api_url = f"{self.server_url}/api/chat"
+        logger.info(f"[OLLAMA] Making native chat API call to: {api_url}")
+
+        try:
+            async with httpx.AsyncClient(timeout=300.0) as client:
+                response = await client.post(api_url, json=payload, headers=headers)
+                try:
+                    response.raise_for_status()
+                except httpx.HTTPStatusError as http_err:
+                    detail = await self._extract_error_detail(http_err.response)
+                    return self._format_error(f"{http_err} | {detail}", model)
+
+                result = response.json()
+                message = result.get("message") if isinstance(result.get("message"), dict) else {}
+                content = message.get("content", "") if isinstance(message.get("content"), str) else ""
+                tool_calls = message.get("tool_calls") if isinstance(message.get("tool_calls"), list) else []
+                done = bool(result.get("done", False))
+                finish_reason = self._normalize_finish_reason(result.get("done_reason"), done=done)
+
+                return {
+                    "text": content,
+                    "content": content,
+                    "message": {
+                        "role": message.get("role", "assistant"),
+                        "content": content,
+                        "tool_calls": tool_calls,
+                    },
+                    "tool_calls": tool_calls,
+                    "provider": "ollama",
+                    "model": model,
+                    "metadata": result,
+                    "finish_reason": finish_reason,
+                    "choices": [
+                        {
+                            "message": {
+                                "role": message.get("role", "assistant"),
+                                "content": content,
+                                "tool_calls": tool_calls,
+                            },
+                            "finish_reason": finish_reason,
+                        }
+                    ],
+                }
+        except Exception as e:
+            return self._format_error(e, model)
+
+    async def _stream_ollama_chat_api(self, messages: List[Dict[str, Any]], model: str, params: Dict[str, Any]) -> AsyncGenerator[Dict[str, Any], None]:
+        import logging
+        logger = logging.getLogger(__name__)
+
+        options = self._build_ollama_options(params)
+        payload = {
+            "model": model,
+            "messages": messages,
+            "stream": True,
+            "options": options,
+        }
+
+        tools = params.get("tools")
+        if isinstance(tools, list) and tools:
+            payload["tools"] = tools
+
+        headers = {'Content-Type': 'application/json'}
+        if self.api_key:
+            headers['Authorization'] = f'Bearer {self.api_key}'
+
+        logger.info(f"[OLLAMA] Streaming native chat API call to: {self.server_url}/api/chat")
+
+        try:
+            async with httpx.AsyncClient(timeout=300.0) as client:
+                async with client.stream("POST", f"{self.server_url}/api/chat", json=payload, headers=headers) as response:
+                    try:
+                        response.raise_for_status()
+                    except httpx.HTTPStatusError as http_err:
+                        detail = await self._extract_error_detail(http_err.response)
+                        yield self._format_error(f"{http_err} | {detail}", model, done=True)
+                        return
+
+                    async for chunk in response.aiter_lines():
+                        if not chunk:
+                            continue
+                        try:
+                            data = json.loads(chunk)
+                        except json.JSONDecodeError:
+                            continue
+
+                        message = data.get("message") if isinstance(data.get("message"), dict) else {}
+                        content = message.get("content", "") if isinstance(message.get("content"), str) else ""
+                        role = message.get("role", "assistant")
+                        tool_calls = message.get("tool_calls") if isinstance(message.get("tool_calls"), list) else []
+                        done = bool(data.get("done", False))
+                        finish_reason = self._normalize_finish_reason(data.get("done_reason"), done=done)
+
+                        yield {
+                            "text": content,
+                            "provider": "ollama",
+                            "model": model,
+                            "metadata": data,
+                            "finish_reason": finish_reason,
+                            "done": done,
+                            "choices": [
+                                {
+                                    "delta": {
+                                        "role": role,
+                                        "content": content,
+                                        "tool_calls": tool_calls,
+                                    },
+                                    "finish_reason": finish_reason,
+                                }
+                            ],
+                        }
+                        await asyncio.sleep(0.01)
+        except Exception as e:
+            yield self._format_error(e, model, done=True)
 
     def _build_ollama_options(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """
