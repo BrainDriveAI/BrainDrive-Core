@@ -562,7 +562,10 @@ export const DisplayLayoutEngineImpl: React.FC<DisplayLayoutEngineProps> = React
     const extractPluginId = (compositeId: string): string => {
       if (!compositeId) return 'unknown';
       const tokens = compositeId.split('_');
-      if (tokens.length === 1) return tokens[0];
+      if (tokens.length === 1) {
+        const hyphenTokens = compositeId.split('-').filter(Boolean);
+        return hyphenTokens[0] || tokens[0];
+      }
       const idx = tokens.findIndex(t => /^(?:[0-9a-f]{24,}|\d{12,})$/i.test(t));
       const boundary = idx > 0 ? idx : 2; // heuristic: often 2 tokens like ServiceExample_Theme
       return tokens.slice(0, boundary).join('_');
@@ -571,9 +574,6 @@ export const DisplayLayoutEngineImpl: React.FC<DisplayLayoutEngineProps> = React
     const normalizeItems = (items: any[] = []): LayoutItem[] => {
       return (items || []).map((it: any) => {
         const id = it?.i ?? '';
-        const pluginId = it?.pluginId || extractPluginId(typeof id === 'string' ? id : '');
-        
-        // CRITICAL: Preserve moduleId from config if available (from args)
         let moduleId = it?.moduleId;
         if (!moduleId && it?.config?.moduleId) {
           moduleId = it.config.moduleId;
@@ -581,6 +581,14 @@ export const DisplayLayoutEngineImpl: React.FC<DisplayLayoutEngineProps> = React
         if (!moduleId) {
           moduleId = id; // Last resort fallback
         }
+
+        // Prefer explicit pluginId, then module map metadata, then extracted fallback.
+        const moduleConfig = moduleMap[moduleId] || moduleMap[id];
+        const pluginId =
+          it?.pluginId ||
+          moduleConfig?.pluginId ||
+          moduleConfig?._legacy?.pluginId ||
+          extractPluginId(typeof id === 'string' ? id : '');
         
         return {
           i: id,
@@ -1239,17 +1247,23 @@ export const DisplayLayoutEngineImpl: React.FC<DisplayLayoutEngineProps> = React
         const extractPluginIdFromComposite = (compositeId: string): string => {
           if (!compositeId) return 'unknown';
           const tokens = compositeId.split('_');
-          if (tokens.length === 1) return tokens[0];
+          if (tokens.length === 1) {
+            const hyphenTokens = compositeId.split('-').filter(Boolean);
+            return hyphenTokens[0] || tokens[0];
+          }
           const idx = tokens.findIndex(t => /^(?:[0-9a-f]{24,}|\d{12,})$/i.test(t));
           const boundary = idx > 0 ? idx : 2;
           return tokens.slice(0, boundary).join('_');
         };
 
-        // Try to extract pluginId from moduleId if item.pluginId is 'unknown'
-        let fallbackPluginId = item.pluginId;
+        // Prefer explicit pluginId first, then module metadata, then extracted fallback.
+        const mappedModule = moduleMap[item.moduleId]
+          || Object.values(moduleMap).find((moduleConfig: any) => moduleConfig?._legacy?.moduleId === item.moduleId);
+        let fallbackPluginId = (item as any)?.config?._originalItem?.pluginId
+          || item.pluginId
+          || mappedModule?.pluginId
+          || mappedModule?._legacy?.pluginId;
         if (!fallbackPluginId || fallbackPluginId === 'unknown') {
-          // Try to extract plugin ID from the module ID pattern
-          // e.g., "BrainDriveChat_1830586da8834501bea1ef1d39c3cbe8_BrainDriveChat_BrainDriveChat_1754404718788"
           const potentialPluginId = extractPluginIdFromComposite(item.moduleId || '');
           fallbackPluginId = potentialPluginId || fallbackPluginId;
         }
@@ -1417,19 +1431,27 @@ export const DisplayLayoutEngineImpl: React.FC<DisplayLayoutEngineProps> = React
             const extractPluginIdLocal = (compositeId: string): string => {
               if (!compositeId) return 'unknown';
               const tokens = compositeId.split('_');
-              if (tokens.length === 1) return tokens[0];
+              if (tokens.length === 1) {
+                const hyphenTokens = compositeId.split('-').filter(Boolean);
+                return hyphenTokens[0] || tokens[0];
+              }
               const idx = tokens.findIndex(t => /^(?:[0-9a-f]{24,}|\d{12,})$/i.test(t));
               const boundary = idx > 0 ? idx : 2;
               return tokens.slice(0, boundary).join('_');
             };
 
-            // Normalize current candidates
-            const candidatePluginId =
-              (item as any)?.config?._originalItem?.pluginId ||
-              (item.pluginId && item.pluginId !== 'unknown' && item.pluginId.includes('_')
-                ? item.pluginId
-                : extractPluginIdLocal(item.moduleId || (item as any)?.config?._originalItem?.moduleId || (item.i || '')));
             const candidateModuleId = (item.config as any)?.moduleId || (item as any)?.config?._originalItem?.moduleId || item.moduleId;
+            const mappedModule = moduleMap[candidateModuleId]
+              || Object.values(moduleMap).find((moduleConfig: any) => moduleConfig?._legacy?.moduleId === candidateModuleId);
+            const directPluginId = (item as any)?.config?._originalItem?.pluginId || item.pluginId;
+            const hasDirectPluginId = typeof directPluginId === 'string'
+              && directPluginId.trim().length > 0
+              && directPluginId !== 'unknown';
+            const candidatePluginId = hasDirectPluginId
+              ? directPluginId
+              : (mappedModule?.pluginId
+                || mappedModule?._legacy?.pluginId
+                || extractPluginIdLocal(item.moduleId || (item as any)?.config?._originalItem?.moduleId || (item.i || '')));
 
             // Use last known-good identity if it is more specific/complete
             const prev = stableIdentityRef.current.get(item.i);
