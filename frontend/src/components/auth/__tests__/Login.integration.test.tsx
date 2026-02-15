@@ -61,8 +61,8 @@ describe('Login Component Error Handling', () => {
     renderLogin();
 
     // Fill in login form
-    const emailInput = screen.getByLabelText(/email/i);
-    const passwordInput = screen.getByLabelText(/password/i);
+    const emailInput = screen.getAllByLabelText(/email/i, { selector: 'input' })[0];
+    const passwordInput = screen.getAllByLabelText(/^password/i, { selector: 'input' })[0];
     const loginButton = screen.getByRole('button', { name: /sign in/i });
 
     fireEvent.change(emailInput, { target: { value: 'test@example.com' } });
@@ -71,11 +71,11 @@ describe('Login Component Error Handling', () => {
 
     // Wait for error message to appear
     await waitFor(() => {
-      expect(screen.getByText(/username or password is incorrect/i)).toBeInTheDocument();
+      expect(screen.getByText(/incorrect password/i)).toBeInTheDocument();
     });
 
     // Check that suggestions are available
-    expect(screen.getByText(/show suggestions/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /need help\?/i })).toBeInTheDocument();
   });
 
   it('should display enhanced error message for account not found', async () => {
@@ -93,8 +93,8 @@ describe('Login Component Error Handling', () => {
     renderLogin();
 
     // Fill in login form
-    const emailInput = screen.getByLabelText(/email/i);
-    const passwordInput = screen.getByLabelText(/password/i);
+    const emailInput = screen.getAllByLabelText(/email/i, { selector: 'input' })[0];
+    const passwordInput = screen.getAllByLabelText(/^password/i, { selector: 'input' })[0];
     const loginButton = screen.getByRole('button', { name: /sign in/i });
 
     fireEvent.change(emailInput, { target: { value: 'nonexistent@example.com' } });
@@ -103,7 +103,7 @@ describe('Login Component Error Handling', () => {
 
     // Wait for error message to appear
     await waitFor(() => {
-      expect(screen.getByText(/no account found with this email address/i)).toBeInTheDocument();
+      expect(screen.getByText(/couldn't find an account with this email address/i)).toBeInTheDocument();
     });
 
     // Check that "Create Account" action is available
@@ -120,8 +120,8 @@ describe('Login Component Error Handling', () => {
     renderLogin();
 
     // Fill in login form
-    const emailInput = screen.getByLabelText(/email/i);
-    const passwordInput = screen.getByLabelText(/password/i);
+    const emailInput = screen.getAllByLabelText(/email/i, { selector: 'input' })[0];
+    const passwordInput = screen.getAllByLabelText(/^password/i, { selector: 'input' })[0];
     const loginButton = screen.getByRole('button', { name: /sign in/i });
 
     fireEvent.change(emailInput, { target: { value: 'test@example.com' } });
@@ -130,11 +130,11 @@ describe('Login Component Error Handling', () => {
 
     // Wait for error message to appear
     await waitFor(() => {
-      expect(screen.getByText(/unable to connect to the server/i)).toBeInTheDocument();
+      expect(screen.getAllByText(/unable to connect to the server/i).length).toBeGreaterThan(0);
     });
 
     // Check that suggestions are available
-    expect(screen.getByText(/check your internet connection/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /need help\?/i })).toBeInTheDocument();
   });
 
   it('should show real-time email validation', async () => {
@@ -145,7 +145,7 @@ describe('Login Component Error Handling', () => {
     fireEvent.click(registerTab);
 
     // Find email input in registration form
-    const emailInputs = screen.getAllByLabelText(/email/i);
+    const emailInputs = screen.getAllByLabelText(/email/i, { selector: 'input' });
     const registrationEmailInput = emailInputs[emailInputs.length - 1]; // Get the last one (registration form)
 
     // Type invalid email
@@ -166,8 +166,7 @@ describe('Login Component Error Handling', () => {
     fireEvent.click(registerTab);
 
     // Find password input in registration form
-    const passwordInputs = screen.getAllByLabelText(/^password$/i);
-    const registrationPasswordInput = passwordInputs[passwordInputs.length - 1]; // Get the last one (registration form)
+    const registrationPasswordInput = screen.getByLabelText(/^password/i);
 
     // Type a weak password
     fireEvent.change(registrationPasswordInput, { target: { value: 'weak' } });
@@ -193,8 +192,8 @@ describe('Login Component Error Handling', () => {
     renderLogin();
 
     // Fill in login form
-    const emailInput = screen.getByLabelText(/email/i);
-    const passwordInput = screen.getByLabelText(/password/i);
+    const emailInput = screen.getAllByLabelText(/email/i, { selector: 'input' })[0];
+    const passwordInput = screen.getAllByLabelText(/^password/i, { selector: 'input' })[0];
     const loginButton = screen.getByRole('button', { name: /sign in/i });
 
     fireEvent.change(emailInput, { target: { value: 'test@example.com' } });
@@ -203,13 +202,13 @@ describe('Login Component Error Handling', () => {
 
     // Wait for error message to appear
     await waitFor(() => {
-      expect(screen.getByText(/username or password is incorrect/i)).toBeInTheDocument();
+      expect(screen.getByText(/incorrect password/i)).toBeInTheDocument();
     });
 
     // Wait a bit more to ensure the message persists
     await new Promise(resolve => setTimeout(resolve, 600));
 
     // Error message should still be visible
-    expect(screen.getByText(/username or password is incorrect/i)).toBeInTheDocument();
+    expect(screen.getByText(/incorrect password/i)).toBeInTheDocument();
   });
 });

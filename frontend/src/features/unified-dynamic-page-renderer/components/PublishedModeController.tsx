@@ -240,8 +240,14 @@ export const PublishedModeController: React.FC<PublishedModeControllerProps> = (
       return;
     }
 
-    const target = event.currentTarget as HTMLElement;
-    const moduleId = target.closest('[data-module-id]')?.getAttribute('data-module-id');
+    const target = (event.target || event.currentTarget) as HTMLElement | null;
+    if (!target) {
+      return;
+    }
+
+    const moduleId = target instanceof Element
+      ? target.closest('[data-module-id]')?.getAttribute('data-module-id')
+      : null;
 
     const interactionEvent: InteractionEvent = {
       type,
