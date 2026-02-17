@@ -117,7 +117,7 @@ plugins/**/.env.local
 plugins/**/.env.development.local
 plugins/**/.env.test.local
 plugins/**/.env.production.local
-plugins/
+/plugins/
 
 # Backend plugins directory - keep directory but ignore contents
 backend/plugins/*
