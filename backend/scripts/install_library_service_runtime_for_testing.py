@@ -68,11 +68,11 @@ _bootstrap_env()
 from app.core.database import get_db  # type: ignore
 from app.models.user import User  # type: ignore
 
-DEFAULT_PLUGIN_SLUG = "BrainDriveLibraryService"
+DEFAULT_PLUGIN_SLUG = "BrainDriveLibraryPlugin"
 DEFAULT_SERVICE_NAME = "library_service"
-DEFAULT_PLUGIN_NAME = "BrainDrive Library Service (Testing)"
-DEFAULT_PLUGIN_DESCRIPTION = "Testing-only plugin shell for Library Service runtime validation."
-DEFAULT_PLUGIN_VERSION = "0.1.0-testing"
+DEFAULT_PLUGIN_NAME = "BrainDrive Library Plugin"
+DEFAULT_PLUGIN_DESCRIPTION = "Local runtime wiring for BrainDrive Library Plugin service glue."
+DEFAULT_PLUGIN_VERSION = "1.1.1-local"
 DEFAULT_RUNTIME_DIR_KEY = "Library-Service"
 DEFAULT_STATUS = "pending"
 DEFAULT_ENV_INHERIT = "minimal"
@@ -298,7 +298,7 @@ async def _existing_plugin_by_id(db, user_id: str, plugin_id: str):
     result = await db.execute(
         text(
             """
-            SELECT id, plugin_slug
+            SELECT id, plugin_slug, required_services_runtime
             FROM plugin
             WHERE id = :plugin_id AND user_id = :user_id
             LIMIT 1
@@ -313,7 +313,7 @@ async def _existing_plugin_by_slug(db, user_id: str, plugin_slug: str):
     result = await db.execute(
         text(
             """
-            SELECT id, plugin_slug
+            SELECT id, plugin_slug, required_services_runtime
             FROM plugin
             WHERE plugin_slug = :plugin_slug AND user_id = :user_id
             LIMIT 1
@@ -322,6 +322,71 @@ async def _existing_plugin_by_slug(db, user_id: str, plugin_slug: str):
         {"plugin_slug": plugin_slug, "user_id": user_id},
     )
     return result.mappings().first()
+
+
+def _parse_json_list(raw_value: Any) -> list[str]:
+    if raw_value is None:
+        return []
+    if isinstance(raw_value, list):
+        return [str(item).strip() for item in raw_value if str(item).strip()]
+    if isinstance(raw_value, str):
+        try:
+            parsed = json.loads(raw_value)
+            if isinstance(parsed, list):
+                return [str(item).strip() for item in parsed if str(item).strip()]
+        except json.JSONDecodeError:
+            return []
+    return []
+
+
+async def _align_plugin_glue_fields(
+    db,
+    *,
+    user_id: str,
+    plugin_id: str,
+    plugin_slug: str,
+    service_name: str,
+    required_services_runtime: Any,
+) -> None:
+    required_services = _parse_json_list(required_services_runtime)
+    if service_name not in required_services:
+        required_services.append(service_name)
+    if not required_services:
+        required_services = [service_name]
+
+    await db.execute(
+        text(
+            """
+            UPDATE plugin
+            SET
+                type = :type,
+                plugin_type = :plugin_type,
+                enabled = :enabled,
+                status = :status,
+                scope = :scope,
+                endpoints_file = COALESCE(NULLIF(endpoints_file, ''), :endpoints_file),
+                route_prefix = COALESCE(NULLIF(route_prefix, ''), :route_prefix),
+                required_services_runtime = :required_services_runtime,
+                backend_dependencies = COALESCE(backend_dependencies, :backend_dependencies),
+                updated_at = :updated_at
+            WHERE id = :plugin_id AND user_id = :user_id
+            """
+        ),
+        {
+            "type": "fullstack",
+            "plugin_type": "fullstack",
+            "enabled": True,
+            "status": "activated",
+            "scope": plugin_slug,
+            "endpoints_file": "endpoints.py",
+            "route_prefix": "/",
+            "required_services_runtime": json.dumps(required_services),
+            "backend_dependencies": json.dumps([]),
+            "updated_at": _utc_now().isoformat(),
+            "plugin_id": plugin_id,
+            "user_id": user_id,
+        },
+    )
 
 
 async def _ensure_plugin_row(
@@ -345,10 +410,26 @@ async def _ensure_plugin_row(
                 f"Existing plugin id '{plugin_id}' belongs to slug '{existing_slug}', "
                 f"not '{plugin_slug}'."
             )
+        await _align_plugin_glue_fields(
+            db,
+            user_id=user_id,
+            plugin_id=str(existing["id"]),
+            plugin_slug=plugin_slug,
+            service_name=service_name,
+            required_services_runtime=existing.get("required_services_runtime"),
+        )
         return str(existing["id"]), "existing_by_id"
 
     existing_slug = await _existing_plugin_by_slug(db, user_id, plugin_slug)
     if existing_slug:
+        await _align_plugin_glue_fields(
+            db,
+            user_id=user_id,
+            plugin_id=str(existing_slug["id"]),
+            plugin_slug=plugin_slug,
+            service_name=service_name,
+            required_services_runtime=existing_slug.get("required_services_runtime"),
+        )
         return str(existing_slug["id"]), "existing_by_slug"
 
     if skip_plugin_stub:
@@ -366,16 +447,16 @@ async def _ensure_plugin_row(
                 type, plugin_type, enabled, status, official, author,
                 compatibility, scope, is_local, source_type, source_url,
                 installation_type, permissions, config_fields, messages,
-                dependencies, required_services_runtime, backend_dependencies,
-                created_at, updated_at, user_id
+                dependencies, required_services_runtime, endpoints_file, route_prefix,
+                backend_dependencies, created_at, updated_at, user_id
             )
             VALUES (
                 :id, :plugin_slug, :name, :description, :version,
                 :type, :plugin_type, :enabled, :status, :official, :author,
                 :compatibility, :scope, :is_local, :source_type, :source_url,
                 :installation_type, :permissions, :config_fields, :messages,
-                :dependencies, :required_services_runtime, :backend_dependencies,
-                :created_at, :updated_at, :user_id
+                :dependencies, :required_services_runtime, :endpoints_file, :route_prefix,
+                :backend_dependencies, :created_at, :updated_at, :user_id
             )
             """
         ),
@@ -385,8 +466,8 @@ async def _ensure_plugin_row(
             "name": plugin_name,
             "description": plugin_description,
             "version": plugin_version,
-            "type": "backend",
-            "plugin_type": "backend",
+            "type": "fullstack",
+            "plugin_type": "fullstack",
             "enabled": True,
             "status": "activated",
             "official": False,
@@ -402,6 +483,8 @@ async def _ensure_plugin_row(
             "messages": json.dumps({}),
             "dependencies": json.dumps([]),
             "required_services_runtime": json.dumps([service_name]),
+            "endpoints_file": "endpoints.py",
+            "route_prefix": "/",
             "backend_dependencies": json.dumps([]),
             "created_at": now_iso,
             "updated_at": now_iso,
@@ -570,7 +653,7 @@ async def _delete_plugin_stub_if_safe(
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Install/update/delete Library Service runtime rows for testing."
+        description="Install/update/delete Library Service runtime rows and align Library plugin backend glue."
     )
     parser.add_argument("--user-id", help="User ID to target.")
     parser.add_argument("--user-email", help="User email to resolve user ID.")
@@ -586,17 +669,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--plugin-name",
         default=DEFAULT_PLUGIN_NAME,
-        help="Plugin name used when creating a testing plugin stub.",
+        help="Plugin name used when creating a plugin row if missing.",
     )
     parser.add_argument(
         "--plugin-description",
         default=DEFAULT_PLUGIN_DESCRIPTION,
-        help="Plugin description used when creating a testing plugin stub.",
+        help="Plugin description used when creating a plugin row if missing.",
     )
     parser.add_argument(
         "--plugin-version",
         default=DEFAULT_PLUGIN_VERSION,
-        help="Plugin version used when creating a testing plugin stub.",
+        help="Plugin version used when creating a plugin row if missing.",
     )
     parser.add_argument(
         "--skip-plugin-stub",

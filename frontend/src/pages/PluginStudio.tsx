@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Box, CircularProgress } from '@mui/material';
 import { PluginCanvas } from '../components/PluginCanvas';
 import { PluginToolbar } from '../components/PluginToolbar';
@@ -10,6 +10,8 @@ import { useTheme } from '../contexts/ServiceContext';
 import ComponentErrorBoundary from '../components/ComponentErrorBoundary';
 import { pageService } from '../services/pageService';
 
+const GLOBAL_PAGES_REFRESH_EVENT = 'braindrive:pages:refresh';
+
 const PluginStudio = () => {
   const [allPages, setAllPages] = useState<Page[]>([]);
   const [currentPage, setCurrentPage] = useState<Page | null>(null);
@@ -17,6 +19,14 @@ const PluginStudio = () => {
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
   const theme = useTheme();
+
+  const broadcastGlobalPageRefresh = useCallback(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    window.dispatchEvent(new Event(GLOBAL_PAGES_REFRESH_EVENT));
+  }, []);
   
   // Use a ref to track if we've already created a default page
   // This ensures we only create one default page even if the component re-renders
@@ -225,6 +235,7 @@ const PluginStudio = () => {
       
       // Switch to the new page
       setCurrentPage(transformedPage);
+      broadcastGlobalPageRefresh();
       
       return transformedPage;
     } catch (error) {
@@ -254,6 +265,7 @@ const PluginStudio = () => {
       // Update the local state
       setAllPages(prev => [...prev, localPage]);
       setCurrentPage(localPage);
+      broadcastGlobalPageRefresh();
       
       return localPage;
     }
@@ -276,6 +288,7 @@ const PluginStudio = () => {
         }
         return newPages;
       });
+      broadcastGlobalPageRefresh();
     } catch (error) {
       console.error('Error deleting page:', error);
     }
@@ -312,6 +325,7 @@ const PluginStudio = () => {
         
         return newPages;
       });
+      broadcastGlobalPageRefresh();
     } catch (error) {
       console.error('Error renaming page:', error);
     }

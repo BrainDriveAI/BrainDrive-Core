@@ -36,20 +36,25 @@ export function usePageLoader(options: UsePageLoaderOptions): UsePageLoaderResul
 
     // Helper function to convert a layout item
     const convertLayoutItem = (item: any) => {
-      const moduleId = ('moduleUniqueId' in item) ? item.moduleUniqueId : item.i;
-      let pluginId = ('pluginId' in item) ? item.pluginId :
-                     (legacyPage.modules?.[moduleId]?.pluginId);
+      const layoutKey = ('moduleUniqueId' in item) ? item.moduleUniqueId : item.i;
+      const moduleDef = legacyPage.modules?.[layoutKey];
+      const hasArgs = item.args && typeof item.args === 'object';
+      const args = hasArgs ? item.args : {};
+
+      let pluginId = ('pluginId' in item)
+        ? item.pluginId
+        : (args.pluginId || moduleDef?.pluginId);
       
       // If pluginId is still not found, try to extract it from the moduleId
       if (!pluginId || pluginId === 'unknown') {
         // For complex generated IDs like "BrainDriveChat_1830586da8834501bea1ef1d39c3cbe8_BrainDriveChat_BrainDriveChat_1754404718788"
         // Extract the plugin name (first part before underscore)
-        if (moduleId && typeof moduleId === 'string' && moduleId.includes('_')) {
-          const extractedPluginId = moduleId.split('_')[0];
+        if (layoutKey && typeof layoutKey === 'string' && layoutKey.includes('_')) {
+          const extractedPluginId = layoutKey.split('_')[0];
           if (extractedPluginId && extractedPluginId !== 'unknown') {
             pluginId = extractedPluginId;
             if (process.env.NODE_ENV === 'development') {
-              console.log(`[usePageLoader] Extracted pluginId '${pluginId}' from moduleId '${moduleId}'`);
+              console.log('[usePageLoader] Extracted pluginId ' + pluginId + ' from moduleId ' + layoutKey);
             }
           }
         }
@@ -58,10 +63,17 @@ export function usePageLoader(options: UsePageLoaderOptions): UsePageLoaderResul
       // Skip items without a valid pluginId to prevent infinite loops
       if (!pluginId || pluginId === 'unknown') {
         if (process.env.NODE_ENV === 'development') {
-          console.warn(`[usePageLoader] Skipping layout item with missing pluginId:`, { item, moduleId, pluginId });
+          console.warn('[usePageLoader] Skipping layout item with missing pluginId:', { item, layoutKey, pluginId });
         }
         return null;
       }
+
+      const baseModuleId = args.moduleId || moduleDef?.moduleId || moduleDef?.moduleName || layoutKey;
+      const config = {
+        ...(moduleDef?.config || {}),
+        ...args,
+        moduleId: baseModuleId,
+      };
       
       return {
         i: item.i,
@@ -76,9 +88,9 @@ export function usePageLoader(options: UsePageLoaderOptions): UsePageLoaderResul
         static: ('static' in item) ? item.static : false,
         isDraggable: ('isDraggable' in item) ? item.isDraggable !== false : true,
         isResizable: ('isResizable' in item) ? item.isResizable !== false : true,
-        moduleId,
+        moduleId: baseModuleId,
         pluginId,
-        config: legacyPage.modules?.[moduleId]?.config || {},
+        config,
       };
     };
 

@@ -6,6 +6,8 @@ import { usePageState } from '../../../../contexts/PageStateContext';
 import { DEFAULT_CANVAS_CONFIG } from '../../constants/canvas.constants';
 import { usePlugins } from '../plugin/usePlugins';
 
+const GLOBAL_PAGES_REFRESH_EVENT = 'braindrive:pages:refresh';
+
 /**
  * Custom hook for managing pages
  * @returns Page management functions and state
@@ -18,6 +20,14 @@ export const usePages = () => {
   // Get the clearCache function from PageStateContext
   const { clearCache } = usePageState();
   const { getModuleById } = usePlugins();
+
+  const broadcastGlobalPageRefresh = useCallback(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    window.dispatchEvent(new Event(GLOBAL_PAGES_REFRESH_EVENT));
+  }, []);
   
   // Phase 1: Add debug mode flag
   const isDebugMode = import.meta.env.VITE_LAYOUT_DEBUG === 'true';
@@ -305,6 +315,7 @@ export const usePages = () => {
       // Update the local state
       setPages(prev => [...prev, transformedPage]);
       setCurrentPage(transformedPage);
+      broadcastGlobalPageRefresh();
       
       return transformedPage;
     } catch (error) {
@@ -351,12 +362,13 @@ export const usePages = () => {
       // Update the local state
       setPages(prev => [...prev, localPage]);
       setCurrentPage(localPage);
+      broadcastGlobalPageRefresh();
       
       return localPage;
     } finally {
       setIsLoading(false);
     }
-  }, []);
+  }, [broadcastGlobalPageRefresh]);
   
   /**
    * Delete a page
@@ -387,13 +399,14 @@ export const usePages = () => {
         
         return newPages;
       });
+      broadcastGlobalPageRefresh();
     } catch (error) {
       console.error('Error deleting page:', error);
       setError('Failed to delete page');
     } finally {
       setIsLoading(false);
     }
-  }, [pages.length, currentPage]);
+  }, [pages.length, currentPage, broadcastGlobalPageRefresh]);
   
   /**
    * Rename a page
@@ -429,6 +442,7 @@ export const usePages = () => {
         
         return newPages;
       });
+      broadcastGlobalPageRefresh();
       
       // If the current page was renamed, update it
       if (currentPage && pageId === currentPage.id) {
@@ -440,7 +454,7 @@ export const usePages = () => {
     } finally {
       setIsLoading(false);
     }
-  }, [currentPage]);
+  }, [currentPage, broadcastGlobalPageRefresh]);
   
   /**
    * Save a page

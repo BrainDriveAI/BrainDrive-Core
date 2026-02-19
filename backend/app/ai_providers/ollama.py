@@ -101,10 +101,11 @@ class OllamaProvider(AIProvider):
         import logging
         logger = logging.getLogger(__name__)
 
+        normalized_messages = self._normalize_chat_messages_for_ollama(messages)
         options = self._build_ollama_options(params)
         payload = {
             "model": model,
-            "messages": messages,
+            "messages": normalized_messages,
             "stream": False,
             "options": options,
         }
@@ -167,10 +168,11 @@ class OllamaProvider(AIProvider):
         import logging
         logger = logging.getLogger(__name__)
 
+        normalized_messages = self._normalize_chat_messages_for_ollama(messages)
         options = self._build_ollama_options(params)
         payload = {
             "model": model,
-            "messages": messages,
+            "messages": normalized_messages,
             "stream": True,
             "options": options,
         }
@@ -515,3 +517,95 @@ class OllamaProvider(AIProvider):
         except Exception as e:
             print(f"Chat formatting error: {e}")
             return "Hello, can you help me?"
+
+    def _normalize_chat_messages_for_ollama(self, messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Normalize chat history into Ollama-native tool-call message format."""
+        normalized: List[Dict[str, Any]] = []
+        for msg in messages:
+            if not isinstance(msg, dict):
+                continue
+
+            raw_role = msg.get("role")
+            role = raw_role if isinstance(raw_role, str) else "user"
+            if role not in {"system", "user", "assistant", "tool"}:
+                role = "user"
+
+            raw_content = msg.get("content", "")
+            if isinstance(raw_content, str):
+                content = raw_content
+            elif raw_content is None:
+                content = ""
+            else:
+                try:
+                    content = json.dumps(raw_content, ensure_ascii=False)
+                except Exception:
+                    content = str(raw_content)
+
+            entry: Dict[str, Any] = {
+                "role": role,
+                "content": content,
+            }
+
+            if role == "assistant":
+                tool_calls = self._normalize_tool_calls_for_ollama(msg.get("tool_calls"))
+                if tool_calls:
+                    entry["tool_calls"] = tool_calls
+
+            normalized.append(entry)
+
+        return normalized
+
+    def _normalize_tool_calls_for_ollama(self, raw_tool_calls: Any) -> List[Dict[str, Any]]:
+        if not isinstance(raw_tool_calls, list):
+            return []
+
+        normalized_calls: List[Dict[str, Any]] = []
+        for call in raw_tool_calls:
+            if not isinstance(call, dict):
+                continue
+
+            function = call.get("function") if isinstance(call.get("function"), dict) else {}
+            name = function.get("name") or call.get("name")
+            if not isinstance(name, str) or not name.strip():
+                continue
+
+            raw_arguments = function.get("arguments")
+            if raw_arguments is None:
+                raw_arguments = call.get("arguments")
+            arguments = self._coerce_tool_arguments_object(raw_arguments)
+
+            normalized_call: Dict[str, Any] = {
+                "function": {
+                    "name": name.strip(),
+                    "arguments": arguments,
+                }
+            }
+
+            call_id = call.get("id")
+            if isinstance(call_id, str) and call_id.strip():
+                normalized_call["id"] = call_id.strip()
+
+            normalized_calls.append(normalized_call)
+
+        return normalized_calls
+
+    def _coerce_tool_arguments_object(self, raw_arguments: Any) -> Dict[str, Any]:
+        if isinstance(raw_arguments, dict):
+            return raw_arguments
+
+        if isinstance(raw_arguments, str):
+            stripped = raw_arguments.strip()
+            if not stripped:
+                return {}
+            try:
+                parsed = json.loads(stripped)
+                if isinstance(parsed, dict):
+                    return parsed
+                return {"value": parsed}
+            except Exception:
+                return {"_raw": stripped}
+
+        if raw_arguments is None:
+            return {}
+
+        return {"value": raw_arguments}

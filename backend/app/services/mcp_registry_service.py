@@ -101,21 +101,72 @@ def normalize_tools_payload(payload: Any) -> List[Dict[str, Any]]:
         if not isinstance(parameters, dict):
             parameters = {"type": "object", "properties": {}}
 
+        normalized_function = dict(function_obj)
+        normalized_function["name"] = name.strip()
+        normalized_function["description"] = description
+        normalized_function["parameters"] = parameters
+
         normalized.append(
             {
                 "type": "function",
-                "function": {
-                    "name": name.strip(),
-                    "description": description,
-                    "parameters": parameters,
-                },
+                "function": normalized_function,
             }
         )
 
     return normalized
 
 
-def infer_safety_class(tool_name: str) -> str:
+def _coerce_safety_class(value: Any) -> Optional[str]:
+    if isinstance(value, str):
+        normalized = value.strip().lower().replace("-", "_")
+        if normalized == "readonly":
+            normalized = "read_only"
+        if normalized in {"read_only", "mutating"}:
+            return normalized
+    return None
+
+
+def _extract_explicit_safety_class(
+    tool_schema: Optional[Dict[str, Any]],
+) -> Optional[str]:
+    if not isinstance(tool_schema, dict):
+        return None
+
+    function = tool_schema.get("function")
+    function_obj = function if isinstance(function, dict) else {}
+
+    for candidate in (function_obj, tool_schema):
+        for key in (
+            "x-brain-drive-safety-class",
+            "x_safety_class",
+            "x-safety-class",
+            "safety_class",
+        ):
+            safety = _coerce_safety_class(candidate.get(key))
+            if safety:
+                return safety
+
+        for key in ("x-mutating", "x_mutating", "mutating"):
+            mutating_flag = candidate.get(key)
+            if isinstance(mutating_flag, bool):
+                return "mutating" if mutating_flag else "read_only"
+
+        annotations = candidate.get("annotations")
+        if isinstance(annotations, dict):
+            read_only_hint = annotations.get("readOnlyHint")
+            if isinstance(read_only_hint, bool):
+                return "read_only" if read_only_hint else "mutating"
+
+    return None
+
+
+def infer_safety_class(
+    tool_name: str, tool_schema: Optional[Dict[str, Any]] = None
+) -> str:
+    explicit = _extract_explicit_safety_class(tool_schema)
+    if explicit:
+        return explicit
+
     lowered = (tool_name or "").strip().lower()
     if not lowered:
         return "read_only"
@@ -281,8 +332,9 @@ class MCPRegistryService:
         }
 
         try:
+            request_headers = _build_tool_call_headers(server.user_id)
             async with httpx.AsyncClient(timeout=self.tools_timeout_seconds) as client:
-                response = await client.get(server.tools_url)
+                response = await client.get(server.tools_url, headers=request_headers)
                 response.raise_for_status()
                 payload = response.json()
 
@@ -308,7 +360,7 @@ class MCPRegistryService:
                     description = ""
 
                 source_hash = compute_tool_hash(tool_schema)
-                safety_class = infer_safety_class(name)
+                safety_class = infer_safety_class(name, tool_schema)
                 version = source_hash[:12]
 
                 record = existing_by_name.get(name)
@@ -432,17 +484,54 @@ class MCPRegistryService:
         mcp_scope_mode: str,
         mcp_project_slug: Optional[str],
         plugin_slug: Optional[str] = None,
+        tool_profile: Optional[str] = None,
+        allowed_safety_classes: Optional[List[str]] = None,
+        tool_name_allowlist: Optional[List[str]] = None,
+        priority_tool_names: Optional[List[str]] = None,
         max_tools: int = 32,
         max_schema_bytes: int = 128_000,
     ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
         scope_mode = (mcp_scope_mode or "none").strip().lower()
+        normalized_tool_profile = str(tool_profile or "full").strip().lower() or "full"
+        normalized_safety_classes = {
+            str(item).strip().lower().replace("-", "_")
+            for item in (allowed_safety_classes or [])
+            if str(item).strip()
+        }
+        normalized_safety_classes = {
+            item for item in normalized_safety_classes if item in {"read_only", "mutating"}
+        }
+        normalized_name_allowlist = {
+            str(item).strip()
+            for item in (tool_name_allowlist or [])
+            if str(item).strip()
+        }
+        normalized_priority_names: List[str] = []
+        seen_priority_names = set()
+        for item in (priority_tool_names or []):
+            normalized = str(item).strip()
+            if not normalized or normalized in seen_priority_names:
+                continue
+            normalized_priority_names.append(normalized)
+            seen_priority_names.add(normalized)
+        priority_index = {
+            name: index for index, name in enumerate(normalized_priority_names)
+        }
         if not mcp_tools_enabled or scope_mode != "project" or not mcp_project_slug:
             return [], {
                 "enabled": False,
                 "scope_mode": scope_mode,
                 "project_slug": mcp_project_slug,
                 "available_count": 0,
+                "eligible_count": 0,
                 "selected_count": 0,
+                "filtered_out_count": 0,
+                "tool_profile": normalized_tool_profile,
+                "allowed_safety_classes": (
+                    sorted(normalized_safety_classes) if normalized_safety_classes else None
+                ),
+                "tool_name_allowlist_count": len(normalized_name_allowlist),
+                "priority_tool_name_count": len(normalized_priority_names),
                 "reason": "scope_disabled",
             }
 
@@ -461,10 +550,23 @@ class MCPRegistryService:
 
         result = await self.db.execute(stmt)
         all_tools = list(result.scalars().all())
+        eligible_tools: List[MCPToolRegistry] = []
+        for tool in all_tools:
+            if normalized_safety_classes and str(tool.safety_class or "").strip().lower() not in normalized_safety_classes:
+                continue
+            if normalized_name_allowlist and str(tool.name or "").strip() not in normalized_name_allowlist:
+                continue
+            eligible_tools.append(tool)
 
         selected: List[Dict[str, Any]] = []
         total_schema_bytes = 0
-        for tool in sorted(all_tools, key=lambda item: item.name):
+        for tool in sorted(
+            eligible_tools,
+            key=lambda item: (
+                priority_index.get(str(item.name or "").strip(), len(priority_index)),
+                str(item.name or ""),
+            ),
+        ):
             if len(selected) >= max_tools:
                 break
             schema = tool.schema_json
@@ -482,8 +584,16 @@ class MCPRegistryService:
             "scope_mode": scope_mode,
             "project_slug": mcp_project_slug,
             "available_count": len(all_tools),
+            "eligible_count": len(eligible_tools),
             "selected_count": len(selected),
+            "filtered_out_count": max(0, len(all_tools) - len(eligible_tools)),
             "total_schema_bytes": total_schema_bytes,
+            "tool_profile": normalized_tool_profile,
+            "allowed_safety_classes": (
+                sorted(normalized_safety_classes) if normalized_safety_classes else None
+            ),
+            "tool_name_allowlist_count": len(normalized_name_allowlist),
+            "priority_tool_name_count": len(normalized_priority_names),
         }
 
     async def get_enabled_tool(

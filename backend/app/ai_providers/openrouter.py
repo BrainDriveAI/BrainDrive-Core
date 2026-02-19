@@ -1,6 +1,7 @@
 """
 OpenRouter provider implementation.
 """
+import re
 from typing import Dict, List, Any, AsyncGenerator
 from openai import AsyncOpenAI
 from .base import AIProvider
@@ -8,6 +9,21 @@ from .base import AIProvider
 
 class OpenRouterProvider(AIProvider):
     """OpenRouter provider implementation."""
+
+    @staticmethod
+    def _normalize_model_id(model: str) -> str:
+        normalized = str(model or "").strip()
+        if not normalized:
+            return normalized
+
+        lowered = normalized.lower()
+        if lowered in {"openai/gpt-4o-mini-2024-11-20", "gpt-4o-mini-2024-11-20"}:
+            return "openai/gpt-4o-mini"
+
+        if re.fullmatch(r"openai/gpt-4o-mini-\d{4}-\d{2}-\d{2}", lowered):
+            return "openai/gpt-4o-mini"
+
+        return normalized
     
     @property
     def provider_name(self) -> str:
@@ -147,7 +163,7 @@ class OpenRouterProvider(AIProvider):
         
         # Build the API parameters
         api_params = {
-            "model": model,
+            "model": self._normalize_model_id(model),
             **payload_params
         }
         
@@ -212,7 +228,7 @@ class OpenRouterProvider(AIProvider):
         
         # Build the API parameters
         api_params = {
-            "model": model,
+            "model": self._normalize_model_id(model),
             **payload_params
         }
         
@@ -291,7 +307,7 @@ class OpenRouterProvider(AIProvider):
         
         # Build the API parameters
         api_params = {
-            "model": model,
+            "model": self._normalize_model_id(model),
             "messages": messages,
             **payload_params
         }
@@ -381,7 +397,7 @@ class OpenRouterProvider(AIProvider):
         
         # Build the API parameters
         api_params = {
-            "model": model,
+            "model": self._normalize_model_id(model),
             "messages": messages,
             **payload_params
         }

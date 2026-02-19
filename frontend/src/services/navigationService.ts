@@ -2,6 +2,14 @@ import ApiService from './ApiService';
 import { NavigationRoute, NavigationRouteTree, NavigationRouteMove, NavigationRouteBatchUpdate } from '../types/navigation';
 
 const API_PATH = '/api/v1/navigation-routes';
+const FALLBACK_SYSTEM_ROUTES: Record<string, NavigationRoute> = {
+  dashboard: { id: "fallback-dashboard", name: "Dashboard", route: "dashboard", creator_id: "system", is_system_route: true, is_visible: true },
+  "plugin-studio": { id: "fallback-plugin-studio", name: "Plugin Studio", route: "plugin-studio", creator_id: "system", is_system_route: true, is_visible: true },
+  settings: { id: "fallback-settings", name: "Settings", route: "settings", creator_id: "system", is_system_route: true, is_visible: true },
+  "plugin-manager": { id: "fallback-plugin-manager", name: "Plugin Manager", route: "plugin-manager", creator_id: "system", is_system_route: true, is_visible: true },
+  personas: { id: "fallback-personas", name: "Personas", route: "personas", creator_id: "system", is_system_route: true, is_visible: true }
+};
+
 
 export const navigationService = {
   // Get all navigation routes
@@ -189,19 +197,23 @@ export const navigationService = {
   // Get a navigation route by route path
   async getNavigationRouteByRoute(route: string): Promise<NavigationRoute | null> {
     try {
-      // console.log(`Fetching navigation route with route path: ${route}`);
-      
       // First get all routes
       const routes = await this.getNavigationRoutes();
-      
+
       // Find the route with the matching route path
       const matchingRoute = routes.find(r => r.route === route);
-      
+
       if (!matchingRoute) {
+        const fallbackRoute = FALLBACK_SYSTEM_ROUTES[route];
+        if (fallbackRoute) {
+          console.info(`Using fallback system navigation route for path: ${route}`);
+          return fallbackRoute;
+        }
+
         console.warn(`No navigation route found with route path: ${route}`);
         return null;
       }
-      
+
       // console.log(`Found navigation route for path ${route}:`, matchingRoute);
       return matchingRoute;
     } catch (error) {
