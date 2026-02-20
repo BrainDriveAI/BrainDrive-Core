@@ -77,7 +77,7 @@ class GitHubPluginInitializer(UserInitializerBase):
         Returns:
             bool: True if all required plugins installed successfully, False otherwise
         """
-        del db, kwargs
+        del kwargs
         logger.info("Starting GitHub plugin installation for user %s", user_id)
 
         try:
@@ -206,6 +206,30 @@ class GitHubPluginInitializer(UserInitializerBase):
                 "Failed plugin installs: %s",
                 [{"name": p["name"], "required": p["required"], "error": p["error"]} for p in failed_installs],
             )
+
+        if successful_installs:
+            # New-user plugin installs happen after app startup; reload dynamic plugin routes
+            # so backend/fullstack endpoints are available immediately without restart.
+            try:
+                from app.core.database import db_factory
+                from app.plugins.route_loader import get_plugin_loader
+
+                reload_result = None
+                async with db_factory.session_factory() as reload_db:
+                    reload_result = await get_plugin_loader().reload_routes(reload_db)
+
+                logger.info(
+                    "Reloaded plugin API routes after GitHub plugin initialization for user %s (loaded_plugins=%s mounted_routes=%s)",
+                    user_id,
+                    reload_result.get("loaded_plugins") if isinstance(reload_result, dict) else None,
+                    reload_result.get("mounted_routes") if isinstance(reload_result, dict) else None,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Failed to reload plugin API routes after GitHub plugin initialization for user %s: %s",
+                    user_id,
+                    exc,
+                )
 
         # Required plugin failures should fail onboarding; optional failures should not.
         return len(required_failures) == 0

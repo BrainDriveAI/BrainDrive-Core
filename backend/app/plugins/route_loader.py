@@ -57,16 +57,15 @@ class PluginRouteLoader:
         loaded_plugins = 0
         mounted_routes = 0
         skipped: List[Dict[str, str]] = []
-        seen_slugs: Set[str] = set()
+        loaded_slugs: Set[str] = set()
 
         for plugin in plugins:
             plugin_slug = (plugin.plugin_slug or "").strip()
             if not plugin_slug:
                 skipped.append({"plugin_id": plugin.id, "reason": "missing_plugin_slug"})
                 continue
-            if plugin_slug in seen_slugs:
+            if plugin_slug in loaded_slugs:
                 continue
-            seen_slugs.add(plugin_slug)
 
             route_prefix = self._normalize_route_prefix(plugin.route_prefix or "/")
             endpoints_file = (plugin.endpoints_file or DEFAULT_ENDPOINTS_FILE).strip()
@@ -102,6 +101,7 @@ class PluginRouteLoader:
 
                 mounted_count = self._mount_endpoints(plugin_slug, route_prefix, endpoint_defs)
                 if mounted_count > 0:
+                    loaded_slugs.add(plugin_slug)
                     loaded_plugins += 1
                     mounted_routes += mounted_count
             except Exception as exc:
