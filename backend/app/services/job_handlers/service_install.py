@@ -55,6 +55,7 @@ class ServiceInstallHandler(BaseJobHandler):
         )
 
         service_ops = self._load_ops_module(ops_path)
+        self._patch_schema_loader_compat(service_ops)
 
         results: List[Dict[str, Any]] = []
         total = max(len(service_keys), 1)
@@ -203,7 +204,7 @@ class ServiceInstallHandler(BaseJobHandler):
                     },
                 )
             except Exception as exc:
-                logger.exception("Service install failed", service=key)
+                logger.exception("Service install failed for %s", key)
                 results.append({"service": key, "success": False, "error": str(exc)})
 
         await context.report_progress(
@@ -229,12 +230,69 @@ class ServiceInstallHandler(BaseJobHandler):
             for parameter in signature.parameters.values()
         )
 
+    @staticmethod
+    def _patch_schema_loader_compat(service_ops: Any) -> None:
+        apply_schema_fn = getattr(service_ops, "_apply_schema", None)
+        if not callable(apply_schema_fn):
+            return
+
+        if getattr(service_ops, "_bd_safe_schema_loader", False):
+            return
+
+        def _safe_apply_schema(service: Any, scoped_root: Path) -> List[str]:
+            import importlib.util as _importlib_util
+            import sys as _sys
+            from pathlib import Path as _Path
+
+            schema_module_path = service.repo_path / "app" / "library_schema.py"
+            if not schema_module_path.exists():
+                return []
+
+            spec = _importlib_util.spec_from_file_location(
+                f"library_service_schema_{abs(hash(str(schema_module_path)))}",
+                schema_module_path,
+            )
+            if spec is None or spec.loader is None:
+                raise RuntimeError(f"Unable to import schema module: {schema_module_path}")
+
+            module_name = spec.name or f"library_service_schema_{abs(hash(str(schema_module_path)))}"
+            module = _importlib_util.module_from_spec(spec)
+            _sys.modules[module_name] = module
+            spec.loader.exec_module(module)  # type: ignore[union-attr]
+
+            ensure_fn = getattr(module, "ensure_scoped_library_structure", None)
+            if not callable(ensure_fn):
+                return []
+
+            result = ensure_fn(scoped_root, include_digest_period_files=True)
+            changed_paths = getattr(result, "changed_paths", None)
+            if not changed_paths:
+                return []
+
+            normalized: List[str] = []
+            for item in changed_paths:
+                try:
+                    normalized.append(_Path(item).as_posix())
+                except Exception:
+                    normalized.append(str(item))
+            return normalized
+
+        setattr(service_ops, "_apply_schema", _safe_apply_schema)
+        setattr(service_ops, "_bd_safe_schema_loader", True)
+
     def _load_ops_module(self, path: Path):
         spec = importlib.util.spec_from_file_location("service_install.ops_runtime", path)
         if not spec or not spec.loader:
             raise RuntimeError(f"Unable to load service_ops from {path}")
+
+        module_name = spec.name or "service_install.ops_runtime"
         module = importlib.util.module_from_spec(spec)
+
+        import sys
+
+        sys.modules[module_name] = module
         spec.loader.exec_module(module)  # type: ignore
+
         if not hasattr(module, "prepare_service"):
             raise RuntimeError("service_ops module missing prepare_service")
         return module

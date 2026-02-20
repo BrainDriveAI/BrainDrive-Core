@@ -25,8 +25,8 @@ class SettingsInitializer(UserInitializerBase):
     
     name = "settings_initializer"
     description = "Initializes default settings for a new user"
-    priority = 900  # High priority among post-page initializers
-    dependencies = ["pages_initializer"]
+    priority = 900  # Highest priority among core initializers
+    dependencies = []
     
     # Default settings definitions
     DEFAULT_DEFINITIONS = [
