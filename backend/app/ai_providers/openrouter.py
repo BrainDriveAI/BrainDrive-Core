@@ -1,6 +1,7 @@
 """
 OpenRouter provider implementation.
 """
+import re
 from typing import Dict, List, Any, AsyncGenerator
 from openai import AsyncOpenAI
 from .base import AIProvider
@@ -8,6 +9,21 @@ from .base import AIProvider
 
 class OpenRouterProvider(AIProvider):
     """OpenRouter provider implementation."""
+
+    @staticmethod
+    def _normalize_model_id(model: str) -> str:
+        normalized = str(model or "").strip()
+        if not normalized:
+            return normalized
+
+        lowered = normalized.lower()
+        if lowered in {"openai/gpt-4o-mini-2024-11-20", "gpt-4o-mini-2024-11-20"}:
+            return "openai/gpt-4o-mini"
+
+        if re.fullmatch(r"openai/gpt-4o-mini-\d{4}-\d{2}-\d{2}", lowered):
+            return "openai/gpt-4o-mini"
+
+        return normalized
     
     @property
     def provider_name(self) -> str:
@@ -147,7 +163,7 @@ class OpenRouterProvider(AIProvider):
         
         # Build the API parameters
         api_params = {
-            "model": model,
+            "model": self._normalize_model_id(model),
             **payload_params
         }
         
@@ -212,7 +228,7 @@ class OpenRouterProvider(AIProvider):
         
         # Build the API parameters
         api_params = {
-            "model": model,
+            "model": self._normalize_model_id(model),
             **payload_params
         }
         
@@ -291,7 +307,7 @@ class OpenRouterProvider(AIProvider):
         
         # Build the API parameters
         api_params = {
-            "model": model,
+            "model": self._normalize_model_id(model),
             "messages": messages,
             **payload_params
         }
@@ -307,10 +323,27 @@ class OpenRouterProvider(AIProvider):
         try:
             # Call the OpenRouter API
             response = await self.client.chat.completions.create(**api_params)
+
+            message = response.choices[0].message
+            content = message.content or ""
+            raw_tool_calls = getattr(message, "tool_calls", None) or []
+            tool_calls = []
+            for tool_call in raw_tool_calls:
+                function = getattr(tool_call, "function", None)
+                tool_calls.append(
+                    {
+                        "id": getattr(tool_call, "id", None),
+                        "type": getattr(tool_call, "type", "function"),
+                        "function": {
+                            "name": getattr(function, "name", None),
+                            "arguments": getattr(function, "arguments", None),
+                        },
+                    }
+                )
             
             return {
-                "content": response.choices[0].message.content,
-                "role": response.choices[0].message.role,
+                "content": content,
+                "role": message.role,
                 "provider": "openrouter",
                 "model": model,
                 "finish_reason": response.choices[0].finish_reason,
@@ -321,7 +354,18 @@ class OpenRouterProvider(AIProvider):
                         "completion_tokens": response.usage.completion_tokens,
                         "total_tokens": response.usage.total_tokens
                     } if response.usage else None
-                }
+                },
+                "tool_calls": tool_calls,
+                "choices": [
+                    {
+                        "message": {
+                            "role": message.role,
+                            "content": content,
+                            "tool_calls": tool_calls,
+                        },
+                        "finish_reason": response.choices[0].finish_reason,
+                    }
+                ],
             }
         except Exception as e:
             raise RuntimeError(f"OpenRouter chat completion failed: {e}") from e
@@ -353,7 +397,7 @@ class OpenRouterProvider(AIProvider):
         
         # Build the API parameters
         api_params = {
-            "model": model,
+            "model": self._normalize_model_id(model),
             "messages": messages,
             **payload_params
         }
@@ -379,15 +423,30 @@ class OpenRouterProvider(AIProvider):
                 content = getattr(delta, "content", None) or ""
                 role = getattr(delta, "role", None) or "assistant"
                 finish_reason = choice.finish_reason
+                delta_tool_calls = []
+                raw_delta_tool_calls = getattr(delta, "tool_calls", None) or []
+                for tool_call in raw_delta_tool_calls:
+                    function = getattr(tool_call, "function", None)
+                    delta_tool_calls.append(
+                        {
+                            "id": getattr(tool_call, "id", None),
+                            "type": getattr(tool_call, "type", "function"),
+                            "function": {
+                                "name": getattr(function, "name", None),
+                                "arguments": getattr(function, "arguments", None),
+                            },
+                        }
+                    )
 
                 # Emit terminal finish chunks even when content is empty.
-                if content or finish_reason is not None:
+                if content or finish_reason is not None or delta_tool_calls:
                     yield {
                         "choices": [
                             {
                                 "delta": {
                                     "content": content,
-                                    "role": role
+                                    "role": role,
+                                    "tool_calls": delta_tool_calls,
                                 },
                                 "finish_reason": finish_reason
                             }

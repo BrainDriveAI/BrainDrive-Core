@@ -7,6 +7,8 @@ export interface PageHierarchy {
   [parentRoute: string]: Page[];
 }
 
+const PAGES_REFRESH_EVENT = 'braindrive:pages:refresh';
+
 export function usePages() {
   const [pages, setPages] = useState<Page[]>([]);
   const [pageHierarchy, setPageHierarchy] = useState<PageHierarchy>({ root: [] });
@@ -16,8 +18,29 @@ export function usePages() {
   
   // Function to force a refresh of the pages
   const refreshPages = () => {
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new Event(PAGES_REFRESH_EVENT));
+      return;
+    }
+
     setRefreshTrigger(prev => prev + 1);
   };
+
+  // Sync page refresh across all usePages consumers (sidebar, dynamic routes, dialogs, etc.).
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return undefined;
+    }
+
+    const handleRefresh = () => {
+      setRefreshTrigger(prev => prev + 1);
+    };
+
+    window.addEventListener(PAGES_REFRESH_EVENT, handleRefresh);
+    return () => {
+      window.removeEventListener(PAGES_REFRESH_EVENT, handleRefresh);
+    };
+  }, []);
   
   useEffect(() => {
     const fetchPages = async () => {

@@ -59,6 +59,9 @@ class OllamaProvider(AIProvider):
         print(f"[OLLAMA] Server Name: {self.server_name}")
         print(f"[OLLAMA] Model: {model}")
         print(f"[OLLAMA] Messages: {len(messages)} messages")
+        if isinstance(params.get("tools"), list) and params.get("tools"):
+            return await self._call_ollama_chat_api(messages, model, params)
+
         prompt = self._format_chat_messages(messages)
         
         result = await self._call_ollama_api(prompt, model, params, is_streaming=False)
@@ -73,6 +76,11 @@ class OllamaProvider(AIProvider):
         return result
 
     async def chat_completion_stream(self, messages: List[Dict[str, Any]], model: str, params: Dict[str, Any]) -> AsyncGenerator[Dict[str, Any], None]:
+        if isinstance(params.get("tools"), list) and params.get("tools"):
+            async for chunk in self._stream_ollama_chat_api(messages, model, params):
+                yield chunk
+            return
+
         prompt = self._format_chat_messages(messages)
         
         # TODO: implement full cancellation support
@@ -88,6 +96,143 @@ class OllamaProvider(AIProvider):
                     "finish_reason": chunk.get("finish_reason")
                 }]
             yield chunk
+
+    async def _call_ollama_chat_api(self, messages: List[Dict[str, Any]], model: str, params: Dict[str, Any]) -> Dict[str, Any]:
+        import logging
+        logger = logging.getLogger(__name__)
+
+        normalized_messages = self._normalize_chat_messages_for_ollama(messages)
+        options = self._build_ollama_options(params)
+        payload = {
+            "model": model,
+            "messages": normalized_messages,
+            "stream": False,
+            "options": options,
+        }
+
+        tools = params.get("tools")
+        if isinstance(tools, list) and tools:
+            payload["tools"] = tools
+
+        headers = {'Content-Type': 'application/json'}
+        if self.api_key:
+            headers['Authorization'] = f'Bearer {self.api_key}'
+
+        api_url = f"{self.server_url}/api/chat"
+        logger.info(f"[OLLAMA] Making native chat API call to: {api_url}")
+
+        try:
+            async with httpx.AsyncClient(timeout=300.0) as client:
+                response = await client.post(api_url, json=payload, headers=headers)
+                try:
+                    response.raise_for_status()
+                except httpx.HTTPStatusError as http_err:
+                    detail = await self._extract_error_detail(http_err.response)
+                    return self._format_error(f"{http_err} | {detail}", model)
+
+                result = response.json()
+                message = result.get("message") if isinstance(result.get("message"), dict) else {}
+                content = message.get("content", "") if isinstance(message.get("content"), str) else ""
+                tool_calls = message.get("tool_calls") if isinstance(message.get("tool_calls"), list) else []
+                done = bool(result.get("done", False))
+                finish_reason = self._normalize_finish_reason(result.get("done_reason"), done=done)
+
+                return {
+                    "text": content,
+                    "content": content,
+                    "message": {
+                        "role": message.get("role", "assistant"),
+                        "content": content,
+                        "tool_calls": tool_calls,
+                    },
+                    "tool_calls": tool_calls,
+                    "provider": "ollama",
+                    "model": model,
+                    "metadata": result,
+                    "finish_reason": finish_reason,
+                    "choices": [
+                        {
+                            "message": {
+                                "role": message.get("role", "assistant"),
+                                "content": content,
+                                "tool_calls": tool_calls,
+                            },
+                            "finish_reason": finish_reason,
+                        }
+                    ],
+                }
+        except Exception as e:
+            return self._format_error(e, model)
+
+    async def _stream_ollama_chat_api(self, messages: List[Dict[str, Any]], model: str, params: Dict[str, Any]) -> AsyncGenerator[Dict[str, Any], None]:
+        import logging
+        logger = logging.getLogger(__name__)
+
+        normalized_messages = self._normalize_chat_messages_for_ollama(messages)
+        options = self._build_ollama_options(params)
+        payload = {
+            "model": model,
+            "messages": normalized_messages,
+            "stream": True,
+            "options": options,
+        }
+
+        tools = params.get("tools")
+        if isinstance(tools, list) and tools:
+            payload["tools"] = tools
+
+        headers = {'Content-Type': 'application/json'}
+        if self.api_key:
+            headers['Authorization'] = f'Bearer {self.api_key}'
+
+        logger.info(f"[OLLAMA] Streaming native chat API call to: {self.server_url}/api/chat")
+
+        try:
+            async with httpx.AsyncClient(timeout=300.0) as client:
+                async with client.stream("POST", f"{self.server_url}/api/chat", json=payload, headers=headers) as response:
+                    try:
+                        response.raise_for_status()
+                    except httpx.HTTPStatusError as http_err:
+                        detail = await self._extract_error_detail(http_err.response)
+                        yield self._format_error(f"{http_err} | {detail}", model, done=True)
+                        return
+
+                    async for chunk in response.aiter_lines():
+                        if not chunk:
+                            continue
+                        try:
+                            data = json.loads(chunk)
+                        except json.JSONDecodeError:
+                            continue
+
+                        message = data.get("message") if isinstance(data.get("message"), dict) else {}
+                        content = message.get("content", "") if isinstance(message.get("content"), str) else ""
+                        role = message.get("role", "assistant")
+                        tool_calls = message.get("tool_calls") if isinstance(message.get("tool_calls"), list) else []
+                        done = bool(data.get("done", False))
+                        finish_reason = self._normalize_finish_reason(data.get("done_reason"), done=done)
+
+                        yield {
+                            "text": content,
+                            "provider": "ollama",
+                            "model": model,
+                            "metadata": data,
+                            "finish_reason": finish_reason,
+                            "done": done,
+                            "choices": [
+                                {
+                                    "delta": {
+                                        "role": role,
+                                        "content": content,
+                                        "tool_calls": tool_calls,
+                                    },
+                                    "finish_reason": finish_reason,
+                                }
+                            ],
+                        }
+                        await asyncio.sleep(0.01)
+        except Exception as e:
+            yield self._format_error(e, model, done=True)
 
     def _build_ollama_options(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -372,3 +517,95 @@ class OllamaProvider(AIProvider):
         except Exception as e:
             print(f"Chat formatting error: {e}")
             return "Hello, can you help me?"
+
+    def _normalize_chat_messages_for_ollama(self, messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Normalize chat history into Ollama-native tool-call message format."""
+        normalized: List[Dict[str, Any]] = []
+        for msg in messages:
+            if not isinstance(msg, dict):
+                continue
+
+            raw_role = msg.get("role")
+            role = raw_role if isinstance(raw_role, str) else "user"
+            if role not in {"system", "user", "assistant", "tool"}:
+                role = "user"
+
+            raw_content = msg.get("content", "")
+            if isinstance(raw_content, str):
+                content = raw_content
+            elif raw_content is None:
+                content = ""
+            else:
+                try:
+                    content = json.dumps(raw_content, ensure_ascii=False)
+                except Exception:
+                    content = str(raw_content)
+
+            entry: Dict[str, Any] = {
+                "role": role,
+                "content": content,
+            }
+
+            if role == "assistant":
+                tool_calls = self._normalize_tool_calls_for_ollama(msg.get("tool_calls"))
+                if tool_calls:
+                    entry["tool_calls"] = tool_calls
+
+            normalized.append(entry)
+
+        return normalized
+
+    def _normalize_tool_calls_for_ollama(self, raw_tool_calls: Any) -> List[Dict[str, Any]]:
+        if not isinstance(raw_tool_calls, list):
+            return []
+
+        normalized_calls: List[Dict[str, Any]] = []
+        for call in raw_tool_calls:
+            if not isinstance(call, dict):
+                continue
+
+            function = call.get("function") if isinstance(call.get("function"), dict) else {}
+            name = function.get("name") or call.get("name")
+            if not isinstance(name, str) or not name.strip():
+                continue
+
+            raw_arguments = function.get("arguments")
+            if raw_arguments is None:
+                raw_arguments = call.get("arguments")
+            arguments = self._coerce_tool_arguments_object(raw_arguments)
+
+            normalized_call: Dict[str, Any] = {
+                "function": {
+                    "name": name.strip(),
+                    "arguments": arguments,
+                }
+            }
+
+            call_id = call.get("id")
+            if isinstance(call_id, str) and call_id.strip():
+                normalized_call["id"] = call_id.strip()
+
+            normalized_calls.append(normalized_call)
+
+        return normalized_calls
+
+    def _coerce_tool_arguments_object(self, raw_arguments: Any) -> Dict[str, Any]:
+        if isinstance(raw_arguments, dict):
+            return raw_arguments
+
+        if isinstance(raw_arguments, str):
+            stripped = raw_arguments.strip()
+            if not stripped:
+                return {}
+            try:
+                parsed = json.loads(stripped)
+                if isinstance(parsed, dict):
+                    return parsed
+                return {"value": parsed}
+            except Exception:
+                return {"_raw": stripped}
+
+        if raw_arguments is None:
+            return {}
+
+        return {"value": raw_arguments}

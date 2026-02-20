@@ -227,24 +227,43 @@ class OpenAIProvider(AIProvider):
                 messages=messages,
                 **api_params
             )
+
+            message = response.choices[0].message
+            content = message.content or ""
+            raw_tool_calls = getattr(message, "tool_calls", None) or []
+            tool_calls = []
+            for tool_call in raw_tool_calls:
+                function = getattr(tool_call, "function", None)
+                tool_calls.append(
+                    {
+                        "id": getattr(tool_call, "id", None),
+                        "type": getattr(tool_call, "type", "function"),
+                        "function": {
+                            "name": getattr(function, "name", None),
+                            "arguments": getattr(function, "arguments", None),
+                        },
+                    }
+                )
             
             result = {
-                "text": response.choices[0].message.content,
+                "text": content,
                 "provider": "openai",
                 "model": model,
                 "finish_reason": response.choices[0].finish_reason,
                 "metadata": {
                     "id": response.id,
                     "usage": response.usage.model_dump() if response.usage else None
-                }
+                },
+                "tool_calls": tool_calls,
             }
             
             # Add chat-specific fields
             result["choices"] = [
                 {
                     "message": {
-                        "role": response.choices[0].message.role,
-                        "content": response.choices[0].message.content
+                        "role": message.role,
+                        "content": content,
+                        "tool_calls": tool_calls,
                     },
                     "finish_reason": response.choices[0].finish_reason
                 }
@@ -312,9 +331,23 @@ class OpenAIProvider(AIProvider):
                 content = getattr(delta, "content", None) or ""
                 role = getattr(delta, "role", None)
                 finish_reason = choice.finish_reason
+                delta_tool_calls = []
+                raw_delta_tool_calls = getattr(delta, "tool_calls", None) or []
+                for tool_call in raw_delta_tool_calls:
+                    function = getattr(tool_call, "function", None)
+                    delta_tool_calls.append(
+                        {
+                            "id": getattr(tool_call, "id", None),
+                            "type": getattr(tool_call, "type", "function"),
+                            "function": {
+                                "name": getattr(function, "name", None),
+                                "arguments": getattr(function, "arguments", None),
+                            },
+                        }
+                    )
 
                 # Emit terminal finish chunks even when content is empty.
-                if content or finish_reason is not None or role is not None:
+                if content or finish_reason is not None or role is not None or delta_tool_calls:
                     chunk_data = {
                         "text": content,
                         "provider": "openai",
@@ -331,7 +364,8 @@ class OpenAIProvider(AIProvider):
                         {
                             "delta": {
                                 "role": role,
-                                "content": content
+                                "content": content,
+                                "tool_calls": delta_tool_calls,
                             },
                             "finish_reason": finish_reason
                         }

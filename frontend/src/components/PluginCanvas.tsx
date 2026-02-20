@@ -84,7 +84,7 @@ interface PluginCanvasProps {
   currentPage: Page | null;
   onPageChange: (page: Page) => void;
   onCreatePage: (pageName: string) => void;
-  onDeletePage: (pageId: string) => void;
+  onDeletePage: (pageId: string) => void | Promise<void>;
   onRenamePage: (pageId: string, newName: string) => void;
 }
 
@@ -391,11 +391,8 @@ export const PluginCanvas: React.FC<PluginCanvasProps> = ({
     try {
       console.log(`Deleting page ${pageId}`);
       
-      // Delete the page
-      await pageService.deletePage(pageId);
-      
-      // Call the parent handler to update the UI
-      onDeletePage(pageId);
+      // Delegate deletion to parent handler (which performs backend delete + state update)
+      await Promise.resolve(onDeletePage(pageId));
       
       // If the current page was deleted, switch to another page
       if (currentPage && currentPage.id === pageId && pages.length > 1) {

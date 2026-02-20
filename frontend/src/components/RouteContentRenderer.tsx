@@ -21,6 +21,18 @@ interface RouteContentRendererProps {
   route?: string;
 }
 
+const FALLBACK_SYSTEM_ROUTES: Record<string, NavigationRoute> = {
+  dashboard: { id: "fallback-dashboard", name: "Dashboard", route: "dashboard", creator_id: "system", is_system_route: true, is_visible: true },
+  "plugin-studio": { id: "fallback-plugin-studio", name: "Plugin Studio", route: "plugin-studio", creator_id: "system", is_system_route: true, is_visible: true },
+  settings: { id: "fallback-settings", name: "Settings", route: "settings", creator_id: "system", is_system_route: true, is_visible: true },
+  "plugin-manager": { id: "fallback-plugin-manager", name: "Plugin Manager", route: "plugin-manager", creator_id: "system", is_system_route: true, is_visible: true },
+  personas: { id: "fallback-personas", name: "Personas", route: "personas", creator_id: "system", is_system_route: true, is_visible: true }
+};
+
+const getFallbackSystemRoute = (routePath: string): NavigationRoute | null => {
+  return FALLBACK_SYSTEM_ROUTES[routePath] || null;
+};
+
 export const RouteContentRenderer: React.FC<RouteContentRendererProps> = ({ route }) => {
   const params = useParams();
   const location = useLocation();
@@ -47,10 +59,14 @@ export const RouteContentRenderer: React.FC<RouteContentRendererProps> = ({ rout
 
         // console.log('Loading route content for:', routePath);
 
-        // Get the navigation route
-        const navRoute = await navigationService.getNavigationRouteByRoute(routePath);
+        // Get the navigation route (fallback to built-in system route when backend rows are missing)
+        const fetchedRoute = await navigationService.getNavigationRouteByRoute(routePath);
+        const navRoute = fetchedRoute || getFallbackSystemRoute(routePath);
         if (!navRoute) {
           throw new Error(`Route not found: ${routePath}`);
+        }
+        if (!fetchedRoute) {
+          console.warn(`Using fallback system route for path: ${routePath}`);
         }
 
         setNavigationRoute(navRoute);

@@ -1,19 +1,66 @@
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from fastapi.exceptions import RequestValidationError
+
 from app.api.v1.api import api_router
 from app.core.config import settings
-from app.routers.plugins import plugin_manager
-from app.plugins.service_installler.start_stop_plugin_services import start_plugin_services_on_startup, stop_all_plugin_services_on_shutdown
-from app.plugins.route_loader import get_plugin_loader
-from app.core.job_manager_provider import initialize_job_manager, shutdown_job_manager
 from app.core.database import db_factory
+from app.core.job_manager_provider import (
+    initialize_job_manager,
+    shutdown_job_manager,
+)
+from app.plugins.route_loader import get_plugin_loader
+from app.plugins.service_installler.start_stop_plugin_services import (
+    start_plugin_services_on_startup,
+    stop_all_plugin_services_on_shutdown,
+)
+from app.routers.plugins import initialize_plugin_manager_on_startup
 import logging
 import time
 import structlog
 
-app = FastAPI(title=settings.APP_NAME)
+logger = structlog.get_logger()
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Initialize services on startup and stop them gracefully on shutdown."""
+    logger.info("Initializing application settings...")
+    from app.init_settings import init_ollama_settings
+
+    await init_ollama_settings()
+    await initialize_job_manager()
+    await initialize_plugin_manager_on_startup()
+    await start_plugin_services_on_startup()
+
+    # Load plugin-owned API routes on startup.
+    plugin_loader = get_plugin_loader()
+    plugin_loader.set_app(app)
+    async with db_factory.session_factory() as session:
+        try:
+            await plugin_loader.reload_routes(session)
+        except Exception as loader_error:
+            logger.warning(
+                "Plugin endpoint route reload failed during startup",
+                error=str(loader_error),
+            )
+
+    logger.info("Settings initialization completed")
+    try:
+        yield
+    finally:
+        logger.info(
+            "Shutting down application and stopping plugin services..."
+        )
+        await stop_all_plugin_services_on_shutdown()
+        await shutdown_job_manager()
+        logger.info("Application shutdown completed.")
+
+
+app = FastAPI(title=settings.APP_NAME, lifespan=lifespan)
 
 # Configure CORS using settings from environment
 app.add_middleware(
@@ -26,43 +73,7 @@ app.add_middleware(
     max_age=settings.CORS_MAX_AGE,
 )
 
-# Add startup event to initialize settings
-@app.on_event("startup")
-async def startup_event():
-    """Initialize required settings on application startup."""
-    logger.info("Initializing application settings...")
-    from app.init_settings import init_ollama_settings
-    await init_ollama_settings()
-    await initialize_job_manager()
-    # Start plugin services
-    await start_plugin_services_on_startup()
-
-    # Load plugin-owned API routes on startup.
-    plugin_loader = get_plugin_loader()
-    plugin_loader.set_app(app)
-    async with db_factory.session_factory() as session:
-        try:
-            await plugin_loader.reload_routes(session)
-        except Exception as loader_error:
-            logger.warning("Plugin endpoint route reload failed during startup", error=str(loader_error))
-
-    logger.info("Settings initialization completed")
-
-
-# Add shutdown event to gracefully stop services
-@app.on_event("shutdown")
-async def shutdown_event():
-    """Gracefully stop all plugin services on application shutdown."""
-    logger.info("Shutting down application and stopping plugin services...")
-    # Stop all plugin services gracefully
-    await stop_all_plugin_services_on_shutdown()
-    await shutdown_job_manager()
-    logger.info("Application shutdown completed.")
-
-
 # Add middleware to log all requests
-logger = structlog.get_logger()
-
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
     """Log all incoming requests."""

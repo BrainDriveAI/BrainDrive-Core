@@ -28,6 +28,54 @@ import { NavigationRoute, NavigationRouteTree } from '../types/navigation';
 // Names of pages that should be excluded from the top level
 const excludedPageNames: string[] = [];
 
+const FALLBACK_SYSTEM_ROUTES: NavigationRoute[] = [
+  {
+    id: "fallback-dashboard",
+    name: "Dashboard",
+    route: "dashboard",
+    creator_id: "system",
+    is_system_route: true,
+    is_visible: true,
+    order: 1
+  },
+  {
+    id: "fallback-plugin-studio",
+    name: "Plugin Studio",
+    route: "plugin-studio",
+    creator_id: "system",
+    is_system_route: true,
+    is_visible: true,
+    order: 2
+  },
+  {
+    id: "fallback-settings",
+    name: "Settings",
+    route: "settings",
+    creator_id: "system",
+    is_system_route: true,
+    is_visible: true,
+    order: 3
+  },
+  {
+    id: "fallback-plugin-manager",
+    name: "Plugin Manager",
+    route: "plugin-manager",
+    creator_id: "system",
+    is_system_route: true,
+    is_visible: true,
+    order: 4
+  },
+  {
+    id: "fallback-personas",
+    name: "Personas",
+    route: "personas",
+    creator_id: "system",
+    is_system_route: true,
+    is_visible: true,
+    order: 5
+  }
+];
+
 interface PageNavigationProps {
   basePath?: string; // Optional base path for all page links
 }
@@ -45,6 +93,20 @@ export const PageNavigation: React.FC<PageNavigationProps> = ({ basePath = '/pag
   // Legacy state for backward compatibility
   const [navigationRoutes, setNavigationRoutes] = useState<NavigationRoute[]>([]);
   const [systemRoutes, setSystemRoutes] = useState<NavigationRoute[]>([]);
+  const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>({
+    dashboard: true,
+    'plugin-studio': true,
+    settings: true,
+    'your-pages': true,
+    'your-pages-builtin': true
+  });
+
+  const toggleSection = (sectionId: string) => {
+    setExpandedSections(prev => ({
+      ...prev,
+      [sectionId]: !prev[sectionId]
+    }));
+  };
 
   // Fetch hierarchical navigation tree
   useEffect(() => {
@@ -397,25 +459,9 @@ export const PageNavigation: React.FC<PageNavigationProps> = ({ basePath = '/pag
   // Render legacy flat navigation (fallback)
   const renderLegacyNavigation = () => {
     // Your Pages navigation item
-    // Move all hooks to top level to avoid conditional hook calls
-    const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>({
-      dashboard: true,
-      'plugin-studio': true,
-      settings: true,
-      'your-pages': true,
-      'your-pages-builtin': true  // Ensure Your Pages is expanded by default
-    });
-
-    const toggleSection = (sectionId: string) => {
-      setExpandedSections(prev => ({
-        ...prev,
-        [sectionId]: !prev[sectionId]
-      }));
-    };
-
     const yourPagesNavItem = {
       id: 'your-pages',
-      name: 'Your Pages 2',
+      name: 'Your Pages',
       icon: <CollectionsBookmarkIcon />,
       path: '/pages'
     };
@@ -430,9 +476,13 @@ export const PageNavigation: React.FC<PageNavigationProps> = ({ basePath = '/pag
     );
 
     // Create a combined list of all routes (system and custom)
-    const allRoutes = [...systemRoutes, ...navigationRoutes]
-      .filter(route => route.is_visible)
+    const allRoutesFromApi = [...systemRoutes, ...navigationRoutes]
+      .filter(route => route.is_visible !== false)
       .sort((a, b) => (a.order || 0) - (b.order || 0));
+
+    const allRoutes = allRoutesFromApi.length > 0
+      ? allRoutesFromApi
+      : FALLBACK_SYSTEM_ROUTES;
 
     return (
       <>

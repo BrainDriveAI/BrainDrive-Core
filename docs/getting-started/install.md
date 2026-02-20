@@ -36,6 +36,32 @@ conda activate BrainDriveDev
 git clone https://github.com/BrainDriveAI/BrainDrive-Core.git
 cd BrainDrive-Core
 ```
+
+### 2.3 Optional: Run the Cross-Platform Bootstrap Script
+
+If you prefer automation, use the installer script instead of doing each step manually.
+
+macOS/Linux:
+```bash
+python3 scripts/bootstrap_braindrive.py --mode dev
+```
+
+Windows PowerShell:
+```powershell
+python scripts/bootstrap_braindrive.py --mode dev
+```
+
+Production-style (non-Docker, backend-served frontend):
+```bash
+python3 scripts/bootstrap_braindrive.py --mode prod
+```
+
+Safe preview (no changes):
+```bash
+python3 scripts/bootstrap_braindrive.py --mode prod --dry-run
+```
+
+When using the script, jump to **Step 5 (Access and Verify)** after it completes.
  
 ---
  
@@ -113,7 +139,7 @@ Keep this process running to serve the BrainDrive UI.
  
 | Component | URL | What to Expect |
 | --- | --- | --- |
-| Backend API docs | [http://localhost:8005/docs](http://localhost:8005/docs) | FastAPI interactive documentation loads without errors. |
+| Backend API docs | [http://localhost:8005/api/v1/docs](http://localhost:8005/api/v1/docs) | FastAPI interactive documentation loads without errors. |
 | Frontend UI | [http://localhost:5173](http://localhost:5173) | BrainDrive web app loads and can reach the backend. |
  
 If the frontend cannot reach the backend, confirm both servers are running and that CORS settings in `backend/.env` include `http://localhost:5173`.

@@ -25,8 +25,8 @@ class SettingsInitializer(UserInitializerBase):
     
     name = "settings_initializer"
     description = "Initializes default settings for a new user"
-    priority = 900  # High priority - settings should be initialized early
-    dependencies = []  # No dependencies
+    priority = 900  # Highest priority among core initializers
+    dependencies = []
     
     # Default settings definitions
     DEFAULT_DEFINITIONS = [
@@ -177,16 +177,25 @@ class SettingsInitializer(UserInitializerBase):
             # Ensure settings definitions exist
             await self._ensure_settings_definitions(db)
             
-            # Retrieve the AI Chat page ID for this user
-            page_stmt = text("SELECT id FROM pages WHERE name = :name AND creator_id = :uid LIMIT 1")
-            result = await db.execute(page_stmt, {"name": "AI Chat", "uid": user_id})
-            ai_chat_page_id = result.scalar_one_or_none()
+            # Prefer Library Capture as the initial landing page when available.
+            page_stmt = text(
+                "SELECT id FROM pages WHERE name = :name AND creator_id = :uid LIMIT 1"
+            )
+            default_page_id = None
+            for candidate_name in ("Library Capture", "Capture", "AI Chat"):
+                page_result = await db.execute(
+                    page_stmt, {"name": candidate_name, "uid": user_id}
+                )
+                resolved_page_id = page_result.scalar_one_or_none()
+                if resolved_page_id:
+                    default_page_id = resolved_page_id
+                    break
 
             # Create settings instances for the user using hardcoded default settings
             for setting_data in self.DEFAULT_SETTINGS:
                 # If this is the general settings entry, populate the value with the page ID
                 if setting_data["definition_id"] == "general_settings":
-                    default_page_value = ai_chat_page_id if ai_chat_page_id else "Dashboard"
+                    default_page_value = default_page_id if default_page_id else "Dashboard"
                     setting_value = {
                         "settings": [
                             {

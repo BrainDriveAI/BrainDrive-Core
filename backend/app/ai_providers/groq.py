@@ -193,12 +193,30 @@ class GroqProvider(AIProvider):
                 messages=messages,
                 stream=False
             )
+
+            message = response.choices[0].message
+            content = message.content or ""
+            raw_tool_calls = getattr(message, "tool_calls", None) or []
+            tool_calls = []
+            for tool_call in raw_tool_calls:
+                function = getattr(tool_call, "function", None)
+                tool_calls.append(
+                    {
+                        "id": getattr(tool_call, "id", None),
+                        "type": getattr(tool_call, "type", "function"),
+                        "function": {
+                            "name": getattr(function, "name", None),
+                            "arguments": getattr(function, "arguments", None),
+                        },
+                    }
+                )
             
             return {
                 "choices": [{
                     "message": {
-                        "content": response.choices[0].message.content,
-                        "role": "assistant"
+                        "content": content,
+                        "role": "assistant",
+                        "tool_calls": tool_calls,
                     },
                     "finish_reason": response.choices[0].finish_reason
                 }],
@@ -211,7 +229,8 @@ class GroqProvider(AIProvider):
                 },
                 "metadata": {
                     "id": response.id if hasattr(response, 'id') else None
-                }
+                },
+                "tool_calls": tool_calls,
             }
             
         except Exception as e:
@@ -245,11 +264,27 @@ class GroqProvider(AIProvider):
             
             async for chunk in stream:
                 try:
-                    if chunk.choices[0].delta.content:
+                    delta_tool_calls = []
+                    raw_delta_tool_calls = getattr(chunk.choices[0].delta, "tool_calls", None) or []
+                    for tool_call in raw_delta_tool_calls:
+                        function = getattr(tool_call, "function", None)
+                        delta_tool_calls.append(
+                            {
+                                "id": getattr(tool_call, "id", None),
+                                "type": getattr(tool_call, "type", "function"),
+                                "function": {
+                                    "name": getattr(function, "name", None),
+                                    "arguments": getattr(function, "arguments", None),
+                                },
+                            }
+                        )
+
+                    if chunk.choices[0].delta.content or delta_tool_calls:
                         yield {
                             "choices": [{
                                 "delta": {
-                                    "content": chunk.choices[0].delta.content
+                                    "content": chunk.choices[0].delta.content or "",
+                                    "tool_calls": delta_tool_calls,
                                 },
                                 "finish_reason": None
                             }],
