@@ -29,7 +29,9 @@ logger = structlog.get_logger()
 PLUGIN_ROUTE_PREFIX = "/api/v1/plugin-api"
 DEFAULT_ENDPOINTS_FILE = "endpoints.py"
 PLUGIN_ROUTE_ALIASES: Dict[str, Sequence[str]] = {
-    # Backward-compatibility alias consumed by BrainDrive Chat plugin builds.
+    # Canonical Library plugin must also answer historical route slugs.
+    "BrainDriveLibraryPlugin": ("braindrive-library", "BrainDriveLibraryService"),
+    # Backward-compatibility alias consumed by older plugin builds.
     "BrainDriveLibraryService": ("braindrive-library",),
 }
 
