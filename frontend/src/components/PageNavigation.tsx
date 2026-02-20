@@ -461,7 +461,7 @@ export const PageNavigation: React.FC<PageNavigationProps> = ({ basePath = '/pag
     // Your Pages navigation item
     const yourPagesNavItem = {
       id: 'your-pages',
-      name: 'Your Pages 2',
+      name: 'Your Pages',
       icon: <CollectionsBookmarkIcon />,
       path: '/pages'
     };
