@@ -9126,6 +9126,8 @@ async def get_all_models(
             }
         }
         
+    except HTTPException:
+        raise
     except Exception as e:
         print(f"Error in get_all_models: {e}")
         import traceback

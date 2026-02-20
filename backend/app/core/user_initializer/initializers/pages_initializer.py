@@ -34,7 +34,25 @@ class PagesInitializer(UserInitializerBase):
         "library_onboarding_initializer",
     ]
 
-    STARTER_PAGE_SPECS: tuple[Dict[str, Any], ...] = ()
+    STARTER_PAGE_SPECS: tuple[Dict[str, Any], ...] = (
+        {
+            "name": "AI Chat",
+            "route_slug": "ai-chat",
+            "route_with_timestamp": True,
+            "description": "",
+            "display_name": "AI Chat Interface",
+            "conversation_type": "chat",
+            "default_library_scope_enabled": False,
+            "default_project_slug": None,
+            "default_project_lifecycle": "active",
+            "apply_defaults_on_new_chat": True,
+            "lock_project_scope": False,
+            "lock_persona_selection": False,
+            "lock_model_selection": False,
+            "default_scope_root": None,
+            "default_scope_path": None,
+        },
+    )
 
     async def get_module_ids(self, user_id: str, db: AsyncSession) -> Dict[str, Any]:
         """Get the module IDs for a user's BrainDrive Chat plugin."""
@@ -75,21 +93,24 @@ class PagesInitializer(UserInitializerBase):
             return {}
 
     def _build_module_args(self, module_id: str, spec: Dict[str, Any]) -> Dict[str, Any]:
+        display_name = str(spec.get("display_name") or f"{spec['name']} Interface")
         args: Dict[str, Any] = {
             "moduleId": module_id,
-            "displayName": f"{spec['name']} Chat",
-            "conversation_type": spec["conversation_type"],
+            "displayName": display_name,
+            "conversation_type": spec.get("conversation_type", "chat"),
             "default_library_scope_enabled": bool(
-                spec["default_library_scope_enabled"]
+                spec.get("default_library_scope_enabled", False)
             ),
             "default_project_slug": spec.get("default_project_slug"),
             "default_project_lifecycle": spec.get(
                 "default_project_lifecycle", "active"
             ),
-            "apply_defaults_on_new_chat": True,
-            "lock_project_scope": False,
-            "lock_persona_selection": False,
-            "lock_model_selection": False,
+            "apply_defaults_on_new_chat": bool(
+                spec.get("apply_defaults_on_new_chat", True)
+            ),
+            "lock_project_scope": bool(spec.get("lock_project_scope", False)),
+            "lock_persona_selection": bool(spec.get("lock_persona_selection", False)),
+            "lock_model_selection": bool(spec.get("lock_model_selection", False)),
             # Forward-compatible root-aware hints for life/project scoping.
             "default_scope_root": spec.get("default_scope_root"),
             "default_scope_path": spec.get("default_scope_path"),
@@ -175,7 +196,8 @@ class PagesInitializer(UserInitializerBase):
             module_ids: Dict[str, str] = module_info.get("module_ids", {})
             chat_module_id = None
             for module_name, module_id in module_ids.items():
-                if "brainDrivechat" in module_name.lower() or "chat" in module_name.lower():
+                lowered_name = module_name.lower()
+                if "braindrivechat" in lowered_name or "chat" in lowered_name:
                     chat_module_id = module_id
                     break
 
@@ -203,7 +225,10 @@ class PagesInitializer(UserInitializerBase):
                     )
                     continue
 
-                route = await self._resolve_unique_route(db, user_id, spec["route_slug"])
+                base_route = str(spec["route_slug"]).strip()
+                if spec.get("route_with_timestamp"):
+                    base_route = f"{base_route}-{int(datetime.datetime.now().timestamp())}"
+                route = await self._resolve_unique_route(db, user_id, base_route)
                 content = self._build_page_content(chat_module_id, spec)
 
                 await db.execute(
