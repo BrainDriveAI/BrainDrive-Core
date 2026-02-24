@@ -2,8 +2,11 @@ from fastapi import APIRouter, HTTPException, Query, Depends
 from typing import Optional, List, Dict, Any
 import httpx
 import asyncio
+import ipaddress
+from urllib.parse import urlparse
 from app.core.auth_deps import require_user
 from app.core.auth_context import AuthContext
+from app.core.config import settings
 from app.models.user import User
 import structlog
 from bs4 import BeautifulSoup
@@ -13,8 +16,36 @@ router = APIRouter()
 logger = structlog.get_logger()
 
 # SearXNG configuration
-SEARXNG_BASE_URL = "http://localhost:8888"
+SEARXNG_BASE_URL = settings.SEARXNG_BASE_URL
 REQUEST_TIMEOUT = 10.0
+
+# SSRF-blocked hostnames
+_BLOCKED_HOSTNAMES = {"metadata.google.internal", "metadata.goog"}
+
+
+def _is_safe_url(url: str) -> bool:
+    """Reject URLs targeting private/internal network ranges."""
+    try:
+        parsed = urlparse(url)
+        hostname = parsed.hostname
+        if not hostname:
+            return False
+        # Block known cloud metadata endpoints
+        if hostname.lower() in _BLOCKED_HOSTNAMES:
+            return False
+        if hostname.lower() in ("localhost",):
+            return False
+        # Resolve and check IP ranges
+        try:
+            addr = ipaddress.ip_address(hostname)
+            if addr.is_private or addr.is_loopback or addr.is_link_local or addr.is_reserved:
+                return False
+        except ValueError:
+            # hostname is a DNS name, not an IP -- allow (it will be resolved by httpx)
+            pass
+        return True
+    except Exception:
+        return False
 
 @router.get("/web")
 async def search_web(
@@ -124,6 +155,13 @@ async def scrape_urls(
     
     async def scrape_single_url(url: str) -> Dict[str, Any]:
         """Scrape a single URL and return cleaned content"""
+        if not _is_safe_url(url):
+            return {
+                "url": url,
+                "success": False,
+                "error": "URL targets a blocked network range",
+                "content": ""
+            }
         try:
             logger.info(f"🕷️ Scraping URL", url=url, user_id=auth.user_id)
             

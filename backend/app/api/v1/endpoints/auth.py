@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta as datetime_timedelta
+from datetime import datetime, timedelta as datetime_timedelta, timezone
 from typing import Optional
 from uuid import uuid4, UUID
 from fastapi import APIRouter, Depends, HTTPException, Response, Request, status
@@ -19,9 +19,6 @@ from app.core.rate_limit_deps import rate_limit_ip, rate_limit_user
 from app.models.user import User
 from app.schemas.user import UserCreate, UserLogin, UserResponse
 import logging
-import json
-import time
-import base64
 from jose import jwt, JWTError
 
 router = APIRouter(prefix="/auth")
@@ -53,55 +50,6 @@ def _log_auth_event_background(request: Request, event_type: str, success: bool,
     asyncio.create_task(_write())
 
 
-# Enhanced logging for token debugging
-def log_token_info(token, token_type="access", mask=True):
-    """Log token information for debugging purposes."""
-    try:
-        # Decode without verification to extract payload for logging
-        parts = token.split(".")
-        if len(parts) != 3:
-            logger.error(
-                f"Invalid {token_type} token format - expected 3 parts, got {len(parts)}"
-            )
-            return
-
-        # Use module-level imports - no need to re-import here
-        # Pad the base64 string if needed
-        padded = parts[1] + "=" * ((4 - len(parts[1]) % 4) % 4)
-        decoded_bytes = base64.b64decode(padded)
-        payload = json.loads(decoded_bytes)
-
-        # Create a safe version of the payload for logging
-        safe_payload = {
-            "exp": payload.get("exp"),
-            "iat": payload.get("iat"),
-            "has_sub": "sub" in payload,
-            "token_type": payload.get("token_type"),
-            "is_refresh": payload.get("refresh", False),
-        }
-
-        # For refresh tokens, log additional info
-        if token_type == "refresh":
-            safe_payload["expires_in_days"] = (
-                (payload.get("exp", 0) - payload.get("iat", 0)) / (24 * 3600)
-                if payload.get("exp") and payload.get("iat")
-                else None
-            )
-
-        # Mask the token for security
-        if mask and token:
-            token_preview = f"{token[:10]}...{token[-5:]}" if len(token) > 15 else "***"
-        else:
-            token_preview = token
-
-        logger.info(
-            f"{token_type.capitalize()} token info: "
-            f"token={token_preview}, "
-            f"payload={json.dumps(safe_payload)}"
-        )
-    except Exception as e:
-        logger.error(f"Error logging {token_type} token info: {e}")
-
 
 def get_cookie_options(path: str = "/") -> dict:
     """Get cookie options based on environment."""
@@ -112,9 +60,7 @@ def get_cookie_options(path: str = "/") -> dict:
         "key": "refresh_token",
         "httponly": True,  # Prevent JavaScript access
         "secure": not is_dev,  # Only set secure=True in production (HTTPS)
-        "samesite": (
-            "lax" if is_dev else "none"
-        ),  # Use 'lax' for dev, 'none' for production
+        "samesite": "lax",  # Use 'lax' in all environments
         "max_age": settings.REFRESH_TOKEN_EXPIRE_DAYS
         * 24
         * 60
@@ -123,100 +69,6 @@ def get_cookie_options(path: str = "/") -> dict:
     }
 
 
-def validate_token_logic(token_payload: dict) -> tuple[bool, str]:
-    """Validate token for logical inconsistencies"""
-    try:
-        iat = token_payload.get('iat', 0)
-        exp = token_payload.get('exp', 0)
-        current_time = time.time()
-        
-        # Check for impossible timestamps
-        if iat > exp:
-            return False, "Token issued after expiry date"
-        
-        if iat > current_time + 86400:  # More than 1 day in future
-            return False, "Token issued in future"
-            
-        if exp < current_time - 86400:  # Expired more than 1 day ago
-            return False, "Token expired long ago"
-            
-        return True, "Valid"
-    except Exception as e:
-        return False, f"Invalid token format: {str(e)}"
-
-
-def clear_refresh_token_systematically(response: Response, request: Request):
-    """Clear refresh token using ALL possible combinations"""
-    host = request.headers.get('host', 'localhost').split(':')[0]
-    
-    # ALL possible domains that might have been used
-    domains = [None, host, 'localhost', '127.0.0.1', '10.0.2.149', '.localhost', '.127.0.0.1']
-    
-    # ALL possible paths
-    paths = ['/', '/api', '/api/v1', '']
-    
-    # ALL possible cookie attribute combinations
-    configs = [
-        {"httponly": True, "secure": False, "samesite": "lax"},
-        {"httponly": True, "secure": False, "samesite": "strict"},
-        {"httponly": False, "secure": False, "samesite": "none"},
-        {"httponly": True, "secure": False, "samesite": None},
-        {"httponly": False, "secure": False, "samesite": "lax"},
-        {"httponly": False, "secure": False, "samesite": "strict"},
-        {"httponly": False, "secure": False, "samesite": None},
-    ]
-    
-    cleared_count = 0
-    for domain in domains:
-        for path in paths:
-            for config in configs:
-                try:
-                    response.set_cookie(
-                        "refresh_token",
-                        "",
-                        max_age=0,
-                        path=path,
-                        domain=domain,
-                        expires="Thu, 01 Jan 1970 00:00:00 GMT",
-                        **config
-                    )
-                    cleared_count += 1
-                except Exception as e:
-                    logger.warning(f"Failed to clear cookie variant - domain={domain}, path={path}: {e}")
-    
-    logger.info(f"Attempted to clear {cleared_count} cookie variants")
-
-
-def log_token_validation(token: str, user_id: str, source: str, result: str):
-    """Enhanced logging for token validation"""
-    try:
-        # Import json and base64 here to ensure they're available in this scope
-        import json
-        import base64
-        
-        # Decode payload for logging (without verification)
-        parts = token.split('.')
-        if len(parts) == 3:
-            padded = parts[1] + "=" * ((4 - len(parts[1]) % 4) % 4)
-            payload = json.loads(base64.b64decode(padded))
-            
-            log_data = {
-                "source": source,
-                "user_id": user_id[:8] + "..." if user_id else "None",
-                "token_preview": token[:10] + "...",
-                "token_length": len(token),
-                "iat": payload.get('iat'),
-                "exp": payload.get('exp'),
-                "jti": payload.get('jti', 'N/A')[:8] + "..." if payload.get('jti') else 'N/A',
-                "env": payload.get('env', 'N/A'),
-                "version": payload.get('version', 'N/A'),
-                "result": result
-            }
-            
-            import json as json_module
-            logger.info(f"Token validation: {json_module.dumps(log_data)}")
-    except Exception as e:
-        logger.warning(f"Failed to log token details: {e}")
 
 
 @router.post("/register", response_model=UserResponse)
@@ -227,6 +79,9 @@ async def register(
     _: None = Depends(rate_limit_ip(limit=3, window_seconds=3600))
 ):
     """Register a new user and initialize their data."""
+    if not settings.ALLOW_REGISTRATION:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Registration is disabled")
+
     try:
         # Check if user already exists
         existing_user = await User.get_by_email(db, user_data.email)
@@ -339,10 +194,9 @@ async def login(
                 minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES
             ),
         )
-        logger.info(f"Created access token for user {user.email} (ID: {user.id})")
-        log_token_info(access_token, "access")
+        logger.info(f"Created access token for user {user.email}")
 
-        # Create refresh token (let JWT library handle iat automatically)
+        # Create refresh token
         refresh_token = create_access_token(
             data={
                 "sub": str(user.id),
@@ -350,38 +204,14 @@ async def login(
             },
             expires_delta=datetime_timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS),
         )
-        logger.info(f"Created refresh token for user {user.email} (ID: {user.id})")
-        log_token_info(refresh_token, "refresh")
 
-        # Store refresh token in database with proper expiration time
+        # Store refresh token in database
         user.refresh_token = refresh_token
-        expiry_time = datetime.utcnow() + datetime_timedelta(
+        expiry_time = datetime.now(timezone.utc) + datetime_timedelta(
             days=settings.REFRESH_TOKEN_EXPIRE_DAYS
         )
         user.refresh_token_expires = expiry_time.isoformat()
-
-        # Log detailed information about the token being stored
-        logger.info(f"Storing refresh token in database for user {user.email}")
-        logger.info(f"Token (first 10 chars): {refresh_token[:10]}")
-        logger.info(f"Token length: {len(refresh_token)}")
-        logger.info(f"Token expires: {user.refresh_token_expires}")
-
-        # Save the user with the new refresh token
         await user.save(db)
-
-        # Verify the token was saved correctly
-        updated_user = await User.get_by_id(db, str(user.id))
-        if updated_user and updated_user.refresh_token == refresh_token:
-            logger.info(f"Refresh token successfully stored in database")
-        else:
-            logger.error(f"Failed to store refresh token in database")
-            if updated_user:
-                logger.error(
-                    f"Stored token (first 10 chars): {updated_user.refresh_token[:10] if updated_user.refresh_token else 'None'}"
-                )
-                logger.error(
-                    f"Stored token length: {len(updated_user.refresh_token) if updated_user.refresh_token else 0}"
-                )
 
         # Set refresh token cookie
         cookie_options = get_cookie_options()
@@ -397,21 +227,15 @@ async def login(
         )
 
         # Get the current time for token issuance timestamp
-        current_time = datetime.utcnow()
+        current_time = datetime.now(timezone.utc)
 
-        # Return both tokens in the response with detailed information
         response_data = {
             "access_token": access_token,
             "token_type": "bearer",
-            "refresh_token": refresh_token,  # Include refresh token in response body as fallback
-            "expires_in": settings.ACCESS_TOKEN_EXPIRE_MINUTES
-            * 60,  # Add expires_in in seconds
-            "refresh_expires_in": settings.REFRESH_TOKEN_EXPIRE_DAYS
-            * 24
-            * 60
-            * 60,  # Refresh token expiry in seconds
-            "issued_at": int(current_time.timestamp()),  # When the token was issued
-            "user_id": str(user.id),  # Include user ID for client-side verification
+            "expires_in": settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+            "refresh_expires_in": settings.REFRESH_TOKEN_EXPIRE_DAYS * 24 * 60 * 60,
+            "issued_at": int(current_time.timestamp()),
+            "user_id": str(user.id),
             "user": UserResponse(
                 id=str(user.id),
                 username=user.username,
@@ -424,21 +248,8 @@ async def login(
             ),
         }
 
-        # Log the response data (excluding sensitive information)
-        safe_response = {
-            "token_type": response_data["token_type"],
-            "expires_in": response_data["expires_in"],
-            "refresh_expires_in": response_data["refresh_expires_in"],
-            "issued_at": response_data["issued_at"],
-            "user_id": response_data["user_id"],
-            "has_access_token": bool(response_data["access_token"]),
-            "has_refresh_token": bool(response_data["refresh_token"]),
-        }
-        logger.info(f"Returning tokens to client: {safe_response}")
-        
-        # Log successful login
         _log_auth_event_background(request, "auth.login_success", success=True, user_id=str(user.id))
-        
+
         return response_data
 
     except HTTPException:
@@ -459,448 +270,105 @@ async def refresh_token(
     _: None = Depends(rate_limit_ip(limit=10, window_seconds=300))
 ):
     """Refresh access token using a valid refresh token from HTTP-only cookie."""
-    # EMERGENCY FIX: Wrap the entire function in a try-except block to ensure it always returns a response
     try:
-        # Log all cookies for debugging
-        logger.info(f"Cookies in request: {request.cookies}")
-        
-        # Get refresh token from cookie
+        # Get refresh token from cookie only (no request body fallback)
         refresh_token = request.cookies.get("refresh_token")
-        
-        # DETAILED TOKEN LOGGING
-        if refresh_token:
-            logger.info(f"🔍 REFRESH TOKEN RECEIVED:")
-            logger.info(f"   Token (first 50 chars): {refresh_token[:50]}...")
-            logger.info(f"   Token (last 50 chars): ...{refresh_token[-50:]}")
-            logger.info(f"   Token length: {len(refresh_token)}")
-            logger.info(f"   Full token: {refresh_token}")
-        else:
-            logger.info("❌ NO REFRESH TOKEN IN REQUEST")
-        
-        # NUCLEAR OPTION: Block the specific problematic token immediately
-        BLOCKED_TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJiOTExODgwMTMyNWQ0MDdmYWIzM2E2Zjc5YmQyNGRhZCIsInJlZnJlc2giOnRydWUsImlhdCI6MTc1NTQ2NjQxMC41MzM1MDEsImV4cCI6MTc1ODA0NDAxMH0.0lVRx8qHILYv3IaaaMWNLDdKx_5ANTp4vMiAGuC_Hzg"
-        
-        if refresh_token == BLOCKED_TOKEN:
-            logger.error("BLOCKED TOKEN DETECTED - IMMEDIATE REJECTION")
-            
-            # Nuclear cookie clearing - try EVERYTHING
-            clear_refresh_token_systematically(response, request)
-            
-            # Also try to set a poison cookie to override it
-            response.set_cookie(
-                "refresh_token",
-                "INVALID_TOKEN_CLEARED",
-                max_age=1,  # Very short expiry
-                path="/",
-                httponly=True,
-                secure=False,
-                samesite="lax"
-            )
-            
+
+        if not refresh_token:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="BLOCKED_TOKEN_DETECTED: This token is permanently blocked",
-                headers={
-                    "X-Auth-Reset": "true",
-                    "X-Clear-Storage": "true",
-                    "X-Blocked-Token": "true",
-                    "Cache-Control": "no-cache, no-store, must-revalidate",
-                    "Pragma": "no-cache",
-                    "Expires": "0"
-                }
-            )
-        
-        # ENHANCED VALIDATION: Check for logically invalid tokens
-        if refresh_token:
-            try:
-                # Import json and base64 here to ensure they're available in this scope
-                import json
-                import base64
-                
-                # Decode token payload for validation (without verification)
-                parts = refresh_token.split(".")
-                if len(parts) == 3:
-                    padded = parts[1] + "=" * ((4 - len(parts[1]) % 4) % 4)
-                    payload = json.loads(base64.b64decode(padded))
-                    
-                    # Validate token logic
-                    is_valid, reason = validate_token_logic(payload)
-                    
-                    if not is_valid:
-                        user_id = payload.get("sub", "unknown")
-                        logger.error(f"INVALID TOKEN DETECTED: {reason} - User: {user_id}")
-                        log_token_validation(refresh_token, user_id, "cookie", f"INVALID: {reason}")
-                        
-                        # Clear cookies systematically
-                        clear_refresh_token_systematically(response, request)
-                        
-                        # Return enhanced error with reset instructions
-                        raise HTTPException(
-                            status_code=status.HTTP_401_UNAUTHORIZED,
-                            detail=f"INVALID_TOKEN_RESET_REQUIRED: {reason}",
-                            headers={
-                                "X-Auth-Reset": "true",
-                                "X-Clear-Storage": "true",
-                                "Cache-Control": "no-cache, no-store, must-revalidate",
-                                "Pragma": "no-cache",
-                                "Expires": "0"
-                            }
-                        )
-                    else:
-                        # Log successful validation
-                        user_id = payload.get("sub", "unknown")
-                        log_token_validation(refresh_token, user_id, "cookie", "VALID")
-            except Exception as e:
-                logger.error(f"Error validating token logic: {e}")
-                # If we can't decode the token, it's invalid
-                clear_refresh_token_systematically(response, request)
-                raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="INVALID_TOKEN_RESET_REQUIRED: Malformed token",
-                    headers={
-                        "X-Auth-Reset": "true",
-                        "X-Clear-Storage": "true",
-                        "Cache-Control": "no-cache, no-store, must-revalidate"
-                    }
-                )
-
-        # If no cookie, try to get refresh token from request body
-        if not refresh_token:
-            logger.info(
-                "No refresh token cookie found in request, checking request body"
+                detail="No refresh token cookie",
             )
 
-            # Parse request body
-            try:
-                body = await request.json()
-                logger.info(f"Request body keys: {body.keys() if body else 'empty'}")
-
-                if body and "refresh_token" in body:
-                    refresh_token = body["refresh_token"]
-                    logger.info(
-                        f"Found refresh token in request body, using as fallback. Token length: {len(refresh_token)}"
-                    )
-                    
-                    # Validate token from request body using enhanced validation
-                    try:
-                        # Import json and base64 here to ensure they're available in this scope
-                        import json
-                        import base64
-                        
-                        parts = refresh_token.split(".")
-                        if len(parts) == 3:
-                            padded = parts[1] + "=" * ((4 - len(parts[1]) % 4) % 4)
-                            payload = json.loads(base64.b64decode(padded))
-                            
-                            # Validate token logic
-                            is_valid, reason = validate_token_logic(payload)
-                            
-                            if not is_valid:
-                                user_id = payload.get("sub", "unknown")
-                                logger.error(f"INVALID TOKEN IN REQUEST BODY: {reason} - User: {user_id}")
-                                log_token_validation(refresh_token, user_id, "request_body", f"INVALID: {reason}")
-                                
-                                # Clear cookies systematically
-                                clear_refresh_token_systematically(response, request)
-                                
-                                raise HTTPException(
-                                    status_code=status.HTTP_401_UNAUTHORIZED,
-                                    detail=f"INVALID_TOKEN_RESET_REQUIRED: {reason}",
-                                    headers={
-                                        "X-Auth-Reset": "true",
-                                        "X-Clear-Storage": "true",
-                                        "Cache-Control": "no-cache, no-store, must-revalidate"
-                                    }
-                                )
-                            else:
-                                # Log successful validation
-                                user_id = payload.get("sub", "unknown")
-                                log_token_validation(refresh_token, user_id, "request_body", "VALID")
-                    except Exception as e:
-                        logger.error(f"Error validating request body token: {e}")
-                        clear_refresh_token_systematically(response, request)
-                        raise HTTPException(
-                            status_code=status.HTTP_401_UNAUTHORIZED,
-                            detail="INVALID_TOKEN_RESET_REQUIRED: Malformed token in request body",
-                            headers={
-                                "X-Auth-Reset": "true",
-                                "X-Clear-Storage": "true"
-                            }
-                        )
-                else:
-                    logger.error("No refresh token in request body either")
-            except Exception as e:
-                logger.error(f"Error parsing request body: {e}")
-
-            # If still no refresh token, return error
-            if not refresh_token:
-                logger.error("No refresh token found in cookie or request body")
-                raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="No refresh token found in cookie or request body",
-                )
-            else:
-                logger.info("Using refresh token from request body")
-
-        # Verify the refresh token
-        logger.info("Verifying refresh token")
-
+        # Verify signature and decode refresh token properly
         try:
-            # Extract user_id from token without verification
+            payload = jwt.decode(
+                refresh_token,
+                settings.SECRET_KEY,
+                algorithms=[settings.ALGORITHM],
+            )
+        except JWTError:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid refresh token",
+            )
+
+        if not payload.get("refresh", False):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid token type: not a refresh token",
+            )
+
+        user_id = payload.get("sub")
+        if not user_id:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid token: missing user ID",
+            )
+
+        # Normalize user_id format (remove dashes)
+        user_id_str = user_id.replace("-", "")
+
+        # Look up user
+        user = await User.get_by_id(db, user_id_str)
+        if not user:
+            logger.warning("Refresh token for non-existent user", user_id=user_id_str)
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid refresh token: user not found",
+            )
+
+        # Validate refresh token matches DB (secure rotation)
+        if not user.refresh_token:
+            logger.warning("No active session for user", user_id=user_id_str)
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="No active session",
+            )
+        elif user.refresh_token != refresh_token:
+            # Potential token theft -- invalidate session and reject
+            logger.warning("Refresh token mismatch, invalidating session", user_id=user_id_str)
+            user.refresh_token = None
+            user.refresh_token_expires = None
+            await user.save(db)
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid refresh token",
+            )
+
+        # Check DB-level expiration
+        if user.refresh_token_expires:
             try:
-                # Decode without verification to extract payload
-                parts = refresh_token.split(".")
-                if len(parts) != 3:
-                    logger.error(
-                        f"Invalid token format - expected 3 parts, got {len(parts)}"
-                    )
-                    logger.error("Invalid token format, cannot extract user ID")
+                token_expires = datetime.fromisoformat(user.refresh_token_expires)
+                if datetime.now(timezone.utc) > token_expires:
                     raise HTTPException(
                         status_code=status.HTTP_401_UNAUTHORIZED,
-                        detail="Invalid token format",
+                        detail="Refresh token has expired",
                     )
-                else:
-                    import base64
-                    import json
-
-                    # Pad the base64 string if needed
-                    padded = parts[1] + "=" * ((4 - len(parts[1]) % 4) % 4)
-                    decoded_bytes = base64.b64decode(padded)
-                    payload = json.loads(decoded_bytes)
-
-                    # Verify token is a refresh token
-                    if not payload.get("refresh", False):
-                        logger.error(f"Token is not a refresh token, rejecting")
-                        raise HTTPException(
-                            status_code=status.HTTP_401_UNAUTHORIZED,
-                            detail="Invalid token type: not a refresh token",
-                        )
-
-                    # Check token expiration
-                    exp = payload.get("exp")
-                    if exp and datetime.fromtimestamp(exp) < datetime.utcnow():
-                        logger.error(f"Token has expired, rejecting")
-                        raise HTTPException(
-                            status_code=status.HTTP_401_UNAUTHORIZED,
-                            detail="Token has expired",
-                        )
-
-                    user_id = payload.get("sub")
-                    logger.info(
-                        f"Extracted user_id from token without verification: {user_id}"
-                    )
-
-                    if not user_id:
-                        logger.error("No user_id in token")
-                        raise HTTPException(
-                            status_code=status.HTTP_401_UNAUTHORIZED,
-                            detail="Invalid token: missing user ID",
-                        )
-            except Exception as e:
-                logger.error(f"Error extracting user_id from token: {e}")
-                # Instead of failing, use a hardcoded user ID for testing
-                # Instead of using a hardcoded user ID, fail properly
-                logger.error(f"Error extracting user_id from token: {e}")
-                raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="Invalid token: could not extract user ID",
-                )
-
-            # Ensure user_id is in the correct format for database lookup
-            # Our database uses varchar IDs without dashes, not UUID format
-            try:
-                # Remove any dashes that might be in the user_id
-                user_id_str = user_id.replace("-", "")
-                logger.info(f"Formatted user_id for database lookup: {user_id_str}")
-            except Exception as e:
-                logger.error(f"Failed to format user_id: {e}")
-                # If formatting fails, use the user_id as is
-                user_id_str = user_id
-                logger.info(f"Using user_id as is: {user_id_str}")
-
-            # Get the user from the database
-            logger.info(f"Getting user by ID: {user_id_str}")
-            user = await User.get_by_id(db, user_id_str)
-
-            if not user:
-                logger.error(f"User not found for ID: {user_id_str}, rejecting token")
-                
-                # Clear the stale cookie by setting an expired cookie
-                response.set_cookie(
-                    "refresh_token",
-                    "",
-                    max_age=0,
-                    path="/",
-                    domain=None,
-                    secure=False,  # Set to False for development
-                    httponly=True,
-                    samesite="lax",
-                    expires="Thu, 01 Jan 1970 00:00:00 GMT"  # Expired date
-                )
-                
-                raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="Invalid refresh token: user not found",
-                )
-
-            # Verify that the refresh token matches what's in the database
-            # Log detailed token information for debugging
-            logger.info(f"Comparing tokens:")
-            logger.info(
-                f"DB token (first 10 chars): {user.refresh_token[:10] if user.refresh_token else 'None'}"
-            )
-            logger.info(
-                f"Request token (first 10 chars): {refresh_token[:10] if refresh_token else 'None'}"
-            )
-
-            # Check if the user has a refresh token in the database
-            if not user.refresh_token:
-                logger.error("User has no refresh token in database")
-                # Instead of failing, update the database with the token from the request
-                logger.info("Updating database with token from request")
-                user.refresh_token = refresh_token
-                expiry_time = datetime.utcnow() + datetime_timedelta(
-                    days=settings.REFRESH_TOKEN_EXPIRE_DAYS
-                )
-                user.refresh_token_expires = expiry_time.isoformat()
-                await user.save(db)
-                logger.info(f"Updated user record with token from request")
-            elif user.refresh_token != refresh_token:
-                logger.warning(f"Token mismatch between database and request")
-                logger.warning(
-                    f"DB token length: {len(user.refresh_token)}, Request token length: {len(refresh_token)}"
-                )
-
-                # For now, update the database with the token from the request
-                # This is a temporary fix to help diagnose the issue
-                logger.info("Updating database with token from request")
-                user.refresh_token = refresh_token
-                expiry_time = datetime.utcnow() + datetime_timedelta(
-                    days=settings.REFRESH_TOKEN_EXPIRE_DAYS
-                )
-                user.refresh_token_expires = expiry_time.isoformat()
-                await user.save(db)
-                logger.info(f"Updated user record with token from request")
-            else:
-                logger.info("Refresh token matches database record")
-
-            # Check if refresh token has expired
-            if user.refresh_token_expires:
-                try:
-                    token_expires = datetime.fromisoformat(user.refresh_token_expires)
-                    current_time = datetime.utcnow()
-
-                    # Log expiration details
-                    time_until_expiry = token_expires - current_time
-                    logger.info(
-                        f"Refresh token expiry check: Current time: {current_time.isoformat()}, Expires: {token_expires.isoformat()}"
-                    )
-                    logger.info(
-                        f"Time until expiry: {time_until_expiry.total_seconds()} seconds"
-                    )
-
-                    # Check if token has expired
-                    if current_time > token_expires:
-                        logger.error(
-                            f"Refresh token has expired. Expired at: {token_expires.isoformat()}"
-                        )
-                        raise HTTPException(
-                            status_code=status.HTTP_401_UNAUTHORIZED,
-                            detail="Refresh token has expired",
-                        )
-                except ValueError as e:
-                    logger.error(f"Error parsing refresh token expiry date: {e}")
-                    # Don't fail on parsing errors, just update the expiration time
-                    expiry_time = datetime.utcnow() + datetime_timedelta(
-                        days=settings.REFRESH_TOKEN_EXPIRE_DAYS
-                    )
-                    user.refresh_token_expires = expiry_time.isoformat()
-                    await user.save(db)
-                    logger.info(
-                        f"Updated token expiration to: {expiry_time.isoformat()} after parsing error"
-                    )
-
-        except JWTError as e:
-            logger.error(f"Error decoding refresh token: JWTError - {str(e)}")
-
-            # Instead of using a hardcoded user ID, fail properly
-            logger.error(f"Error decoding refresh token: JWTError - {str(e)}")
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid refresh token"
-            )
+            except ValueError:
+                logger.error("Unparseable refresh_token_expires", user_id=user_id_str)
 
         # Generate new tokens
-        logger.info("Generating new tokens")
-        access_token_expires = datetime_timedelta(
-            minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES
-        )
-        new_access_token = create_access_token(
-            data={"sub": str(user.id), "iat": datetime.utcnow().timestamp()},
-            expires_delta=access_token_expires,
-        )
-        logger.info(f"New access token generated successfully for user ID: {user.id}")
-        log_token_info(new_access_token, "access")
+        current_time = datetime.now(timezone.utc)
 
-        # Generate new refresh token (rotation) with proper expiration
-        refresh_token_expires = datetime_timedelta(
-            days=settings.REFRESH_TOKEN_EXPIRE_DAYS
+        new_access_token = create_access_token(
+            data={"sub": str(user.id)},
+            expires_delta=datetime_timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES),
         )
+
+        refresh_token_expires = datetime_timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS)
         new_refresh_token = create_access_token(
-            data={
-                "sub": str(user.id),
-                "refresh": True,
-            },
+            data={"sub": str(user.id), "refresh": True},
             expires_delta=refresh_token_expires,
         )
-        logger.info(
-            f"New refresh token generated successfully for user ID: {user.id} (token rotation)"
-        )
-        log_token_info(new_refresh_token, "refresh")
 
-        # Update refresh token in database with proper expiration time
-        try:
-            user.refresh_token = new_refresh_token
-            expiry_time = current_time + refresh_token_expires
-            user.refresh_token_expires = expiry_time.isoformat()
-
-            # Log detailed information about the new refresh token
-            logger.info(
-                f"New refresh token generated and about to be stored in database"
-            )
-            logger.info(f"New token (first 10 chars): {new_refresh_token[:10]}")
-            logger.info(f"New token length: {len(new_refresh_token)}")
-
-            # Save the user with the new refresh token
-            await user.save(db)
-            logger.info(f"Successfully saved new refresh token to database")
-        except Exception as e:
-            # If saving to database fails, log the error but continue anyway
-            logger.error(f"Error saving refresh token to database: {e}")
-            logger.info(
-                "Continuing despite database error (tokens will still be returned to client)"
-            )
-        logger.info(f"New token length: {len(new_refresh_token)}")
-        logger.info(f"Token expires at: {expiry_time.isoformat()}")
-        logger.info(f"Token lifetime: {settings.REFRESH_TOKEN_EXPIRE_DAYS} days")
-
-        # Save the user with the new refresh token
+        # Store new refresh token in DB
+        user.refresh_token = new_refresh_token
+        expiry_time = current_time + refresh_token_expires
+        user.refresh_token_expires = expiry_time.isoformat()
         await user.save(db)
 
-        # Verify the token was saved correctly
-        updated_user = await User.get_by_id(db, str(user.id))
-        if updated_user and updated_user.refresh_token == new_refresh_token:
-            logger.info(f"New refresh token successfully stored in database")
-        else:
-            logger.error(f"Failed to store new refresh token in database")
-            if updated_user:
-                logger.error(
-                    f"Stored token (first 10 chars): {updated_user.refresh_token[:10] if updated_user.refresh_token else 'None'}"
-                )
-                logger.error(
-                    f"Stored token length: {len(updated_user.refresh_token) if updated_user.refresh_token else 0}"
-                )
-
-        # Set new refresh token cookie - use root path to ensure cookie is sent with all requests
+        # Set new refresh token cookie
         cookie_options = get_cookie_options("/")
         response.set_cookie(
             cookie_options["key"],
@@ -913,38 +381,19 @@ async def refresh_token(
             samesite=cookie_options["samesite"],
         )
 
-        # Return both tokens in the response with detailed information
-        response_data = {
+        return {
             "access_token": new_access_token,
             "token_type": "bearer",
-            "refresh_token": new_refresh_token,  # Include refresh token in response body as fallback
-            "expires_in": settings.ACCESS_TOKEN_EXPIRE_MINUTES
-            * 60,  # Add expires_in in seconds
-            "refresh_expires_in": settings.REFRESH_TOKEN_EXPIRE_DAYS
-            * 24
-            * 60
-            * 60,  # Refresh token expiry in seconds
-            "issued_at": int(current_time.timestamp()),  # When the token was issued
-            "user_id": str(user.id),  # Include user ID for client-side verification
+            "expires_in": settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+            "refresh_expires_in": settings.REFRESH_TOKEN_EXPIRE_DAYS * 24 * 60 * 60,
+            "issued_at": int(current_time.timestamp()),
+            "user_id": str(user.id),
         }
-
-        # Log the response data (excluding sensitive information)
-        safe_response = {
-            "token_type": response_data["token_type"],
-            "expires_in": response_data["expires_in"],
-            "refresh_expires_in": response_data["refresh_expires_in"],
-            "issued_at": response_data["issued_at"],
-            "user_id": response_data["user_id"],
-            "has_access_token": bool(response_data["access_token"]),
-            "has_refresh_token": bool(response_data["refresh_token"]),
-        }
-        logger.info(f"Returning new tokens to client: {safe_response}")
-        return response_data
 
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error refreshing token (outer exception): {e}")
+        logger.error(f"Error refreshing token: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Error refreshing token",
@@ -1030,7 +479,7 @@ async def get_current_user_info(
         logger.error(f"Error getting user info: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Internal server error: {str(e)}",
+            detail="Internal server error",
         )
 
 
@@ -1099,7 +548,7 @@ async def update_username(
         logger.error(f"Error updating username: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Internal server error: {str(e)}",
+            detail="Internal server error",
         )
 
 
@@ -1188,332 +637,7 @@ async def update_password(
         logger.error(f"Error updating password: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Internal server error: {str(e)}",
+            detail="Internal server error",
         )
 
 
-@router.post("/nuclear-clear-cookies")
-async def nuclear_clear_cookies(request: Request, response: Response):
-    """
-    Nuclear option: Clear ALL cookies with every possible domain/path combination.
-    This addresses shared development environment cookie pollution issues.
-    """
-    
-    # Get the request host
-    host = request.headers.get("host", "localhost")
-    
-    # Extract domain variations
-    domain_variations = [
-        host,
-        host.split(':')[0],  # Remove port
-        f".{host}",
-        f".{host.split(':')[0]}",
-        "localhost",
-        ".localhost", 
-        "127.0.0.1",
-        ".127.0.0.1",
-        "10.0.2.149",
-        ".10.0.2.149",
-    ]
-    
-    # Path variations
-    path_variations = [
-        "/",
-        "/api",
-        "/api/v1",
-        "/api/v1/auth",
-    ]
-    
-    # Cookie names to clear (including the problematic one and all AspNetCore cookies)
-    cookie_names = [
-        "refresh_token",
-        "access_token", 
-        "token",
-        "auth_token",
-        "session",
-        "JSESSIONID",
-        "PHPSESSID",
-        ".Smart.Antiforgery",
-        ".AspNetCore.Antiforgery.MfBEF8FAV4c",
-        ".AspNetCore.Antiforgery.n7nB1Zop0vY",
-        ".AspNetCore.Antiforgery.jgsIVDtBpfc",
-        ".AspNetCore.Antiforgery.yy6KYerk9As",
-        ".AspNetCore.Antiforgery.HQvFLiDS4EI",
-        ".AspNetCore.Antiforgery.OHHyBbX4Fh4",
-        ".AspNetCore.Antiforgery.iE3U3Kjs4vk",
-        ".AspNetCore.Antiforgery.f3Z33LvPBz0",
-        ".AspNetCore.Antiforgery.o5Lch03m5ek",
-        ".AspNetCore.Antiforgery.0CfnEWqKFLI",
-        ".AspNetCore.Antiforgery.323-jCjgv18",
-        ".AspNetCore.Identity.ApplicationC1",
-        ".AspNetCore.Identity.ApplicationC2",
-        ".AspNetCore.Antiforgery.eIC0QtdCWTo",
-        ".AspNetCore.Antiforgery.kZBODwCsLn0",
-        ".AspNetCore.Antiforgery.Dgsjy1b71sY",
-        ".AspNetCore.Antiforgery.O9VU2ovLVjE",
-        ".AspNetCore.Antiforgery.GWaHR8ygEDs",
-        ".AspNetCore.Antiforgery.1yrNIIOcUxA",
-        ".AspNetCore.Antiforgery.7NBRGKmVPUQ",
-        ".AspNetCore.Antiforgery.LAjWJiFM3FI",
-        ".AspNetCore.Antiforgery.PuRE-prZdIs",
-        ".AspNetCore.Antiforgery.168yrhk6-gA",
-        ".AspNetCore.Antiforgery.OxRvv6aLUlg",
-        ".AspNetCore.Antiforgery.S_R2MqLboe0",
-        ".AspNetCore.Session",
-        ".AspNetCore.Identity.Application",
-        "phpMyAdmin",
-        "pmaAuth-1",
-    ]
-    
-    cleared_count = 0
-    
-    logger.info("🚀 NUCLEAR COOKIE CLEARING INITIATED")
-    logger.info(f"   Host: {host}")
-    logger.info(f"   Domains to try: {len(domain_variations)}")
-    logger.info(f"   Paths to try: {len(path_variations)}")
-    logger.info(f"   Cookies to clear: {len(cookie_names)}")
-    
-    # Nuclear clearing: Try every combination
-    for cookie_name in cookie_names:
-        for domain in domain_variations:
-            for path in path_variations:
-                try:
-                    # Set expired cookie for this domain/path combination
-                    response.set_cookie(
-                        key=cookie_name,
-                        value="",
-                        max_age=0,
-                        expires=0,
-                        path=path,
-                        domain=domain,
-                        secure=False,
-                        httponly=True,
-                        samesite="lax"
-                    )
-                    cleared_count += 1
-                except:
-                    # Some combinations might fail, that's OK
-                    pass
-                
-                try:
-                    # Also try without domain (for localhost)
-                    response.set_cookie(
-                        key=cookie_name,
-                        value="",
-                        max_age=0,
-                        expires=0,
-                        path=path,
-                        secure=False,
-                        httponly=True,
-                        samesite="lax"
-                    )
-                    cleared_count += 1
-                except:
-                    pass
-    
-    logger.info(f"💥 NUCLEAR CLEARING COMPLETE: {cleared_count} cookie clearing attempts made")
-    
-    return {
-        "status": "success",
-        "message": "Nuclear cookie clearing completed",
-        "cleared_attempts": cleared_count,
-        "domains_tried": domain_variations,
-        "paths_tried": path_variations,
-        "cookies_targeted": len(cookie_names),
-        "instructions": [
-            "1. Close ALL browser windows/tabs completely",
-            "2. Clear browser cache and cookies manually (Ctrl+Shift+Delete)",
-            "3. Restart browser completely",
-            "4. Try logging in again with fresh session",
-            "5. If still failing, try incognito/private mode",
-            "6. Consider using a different browser temporarily"
-        ],
-        "note": "This clears cookies across all domain/path combinations to handle shared development environment pollution"
-    }
-
-
-@router.post("/force-logout-clear")
-async def force_logout_clear(request: Request, response: Response):
-    """
-    Force logout and aggressive cookie clearing with cache-busting headers.
-    This is the nuclear option for persistent cookie issues.
-    """
-    
-    logger.info("🚨 FORCE LOGOUT AND CLEAR INITIATED")
-    
-    # Get the request host for domain variations
-    host = request.headers.get("host", "localhost")
-    
-    # All possible cookie names we've seen in the logs
-    all_cookies = [
-        "refresh_token",
-        "access_token",
-        "token",
-        "auth_token",
-        "session",
-        "JSESSIONID",
-        "PHPSESSID",
-        ".Smart.Antiforgery",
-        ".AspNetCore.Antiforgery.MfBEF8FAV4c",
-        ".AspNetCore.Antiforgery.n7nB1Zop0vY",
-        ".AspNetCore.Antiforgery.jgsIVDtBpfc",
-        ".AspNetCore.Antiforgery.yy6KYerk9As",
-        ".AspNetCore.Antiforgery.HQvFLiDS4EI",
-        ".AspNetCore.Antiforgery.OHHyBbX4Fh4",
-        ".AspNetCore.Antiforgery.iE3U3Kjs4vk",
-        ".AspNetCore.Antiforgery.f3Z33LvPBz0",
-        ".AspNetCore.Antiforgery.o5Lch03m5ek",
-        ".AspNetCore.Antiforgery.0CfnEWqKFLI",
-        ".AspNetCore.Antiforgery.323-jCjgv18",
-        ".AspNetCore.Identity.ApplicationC1",
-        ".AspNetCore.Identity.ApplicationC2",
-        ".AspNetCore.Antiforgery.eIC0QtdCWTo",
-        ".AspNetCore.Antiforgery.kZBODwCsLn0",
-        ".AspNetCore.Antiforgery.Dgsjy1b71sY",
-        ".AspNetCore.Antiforgery.O9VU2ovLVjE",
-        ".AspNetCore.Antiforgery.GWaHR8ygEDs",
-        ".AspNetCore.Antiforgery.1yrNIIOcUxA",
-        ".AspNetCore.Antiforgery.7NBRGKmVPUQ",
-        ".AspNetCore.Antiforgery.LAjWJiFM3FI",
-        ".AspNetCore.Antiforgery.PuRE-prZdIs",
-        ".AspNetCore.Antiforgery.168yrhk6-gA",
-        ".AspNetCore.Antiforgery.OxRvv6aLUlg",
-        ".AspNetCore.Antiforgery.S_R2MqLboe0",
-        ".AspNetCore.Session",
-        ".AspNetCore.Identity.Application",
-        "phpMyAdmin",
-        "pmaAuth-1",
-    ]
-    
-    # Domain variations
-    domain_variations = [
-        host,
-        host.split(':')[0],
-        f".{host}",
-        f".{host.split(':')[0]}",
-        "localhost",
-        ".localhost",
-        "127.0.0.1",
-        ".127.0.0.1",
-        "10.0.2.149",
-        ".10.0.2.149",
-    ]
-    
-    # Path variations
-    path_variations = ["/", "/api", "/api/v1", "/api/v1/auth"]
-    
-    cleared_count = 0
-    
-    # Clear every cookie with every domain/path combination
-    for cookie_name in all_cookies:
-        for domain in domain_variations:
-            for path in path_variations:
-                try:
-                    # Method 1: Standard clearing
-                    response.set_cookie(
-                        key=cookie_name,
-                        value="",
-                        max_age=0,
-                        expires=0,
-                        path=path,
-                        domain=domain,
-                        secure=False,
-                        httponly=True,
-                        samesite="lax"
-                    )
-                    cleared_count += 1
-                except:
-                    pass
-                
-                try:
-                    # Method 2: Aggressive clearing with past date
-                    response.set_cookie(
-                        key=cookie_name,
-                        value="CLEARED",
-                        expires="Thu, 01 Jan 1970 00:00:00 GMT",
-                        path=path,
-                        domain=domain,
-                        secure=False,
-                        httponly=True,
-                        samesite="lax"
-                    )
-                    cleared_count += 1
-                except:
-                    pass
-                
-                try:
-                    # Method 3: Without domain (for localhost)
-                    response.set_cookie(
-                        key=cookie_name,
-                        value="",
-                        max_age=0,
-                        expires=0,
-                        path=path,
-                        secure=False,
-                        httponly=True,
-                        samesite="lax"
-                    )
-                    cleared_count += 1
-                except:
-                    pass
-    
-    # Set aggressive cache-busting headers
-    response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate, max-age=0"
-    response.headers["Pragma"] = "no-cache"
-    response.headers["Expires"] = "0"
-    response.headers["Clear-Site-Data"] = '"cache", "cookies", "storage", "executionContexts"'
-    response.headers["X-Auth-Reset"] = "true"
-    response.headers["X-Clear-Storage"] = "true"
-    response.headers["X-Force-Logout"] = "true"
-    
-    logger.info(f"💥 FORCE LOGOUT COMPLETE: {cleared_count} cookie clearing attempts made")
-    
-    return {
-        "status": "success",
-        "message": "Force logout and cookie clearing completed",
-        "cleared_attempts": cleared_count,
-        "instructions": [
-            "1. This response includes Clear-Site-Data header to clear everything",
-            "2. Close ALL browser windows/tabs immediately",
-            "3. Clear browser data manually (Ctrl+Shift+Delete)",
-            "4. Restart browser completely",
-            "5. Visit http://10.0.2.149:5173/clear-cookies.html for additional clearing",
-            "6. Try logging in with a fresh session"
-        ],
-        "frontend_cleaner": "http://10.0.2.149:5173/clear-cookies.html",
-        "note": "This uses the Clear-Site-Data header for maximum effectiveness"
-    }
-
-
-@router.post("/test-cookie-setting")
-async def test_cookie_setting(response: Response):
-    """Test endpoint to verify cookie setting works"""
-    
-    logger.info("🧪 Testing cookie setting...")
-    
-    # Try to set a simple test cookie
-    response.set_cookie(
-        key="test_cookie",
-        value="test_value",
-        max_age=60,
-        path="/",
-        httponly=True,
-        secure=False,
-        samesite="lax"
-    )
-    
-    # Try to clear refresh_token
-    response.set_cookie(
-        key="refresh_token",
-        value="",
-        max_age=0,
-        expires=0,
-        path="/",
-        httponly=True,
-        secure=False,
-        samesite="lax"
-    )
-    
-    logger.info("✅ Cookie setting test completed")
-    
-    return {"status": "success", "message": "Test cookies set"}

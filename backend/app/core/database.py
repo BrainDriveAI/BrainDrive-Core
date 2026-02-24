@@ -33,7 +33,7 @@ class DatabaseFactory:
                 if settings.DATABASE_TYPE == "sqlite" and url.drivername == "sqlite":
                     url = url.set(drivername="sqlite+aiosqlite")
                 
-                logger.info(f"Creating async database engine with URL: {url}")
+                logger.info("Creating async database engine", driver=url.drivername, database=url.database)
                 connect_args = {}
                 if settings.DATABASE_TYPE == "sqlite":
                     connect_args = {"check_same_thread": False, "timeout": 30}

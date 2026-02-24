@@ -59,17 +59,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           // console.log('AuthContext: User account not found, redirecting to login');
           // Force logout and redirect
           localStorage.removeItem('accessToken');
-          localStorage.removeItem('refreshToken');
           navigate('/login?reason=account_not_found');
         } else if (error.message === 'token_expired') {
           // console.log('AuthContext: Token expired, redirecting to login');
           localStorage.removeItem('accessToken');
-          localStorage.removeItem('refreshToken');
           navigate('/login?reason=token_expired');
         } else if (error.message === 'invalid_token_type') {
           // console.log('AuthContext: Invalid token type, redirecting to login');
           localStorage.removeItem('accessToken');
-          localStorage.removeItem('refreshToken');
           navigate('/login?reason=invalid_token');
         }
       }
@@ -105,7 +102,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
                   error.message === 'invalid_token_type') {
                 // console.log('AuthContext: Authentication error during inactivity refresh, redirecting to login');
                 localStorage.removeItem('accessToken');
-                localStorage.removeItem('refreshToken');
                 navigate('/login?reason=session_expired');
               }
             }
@@ -145,7 +141,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 error.message === 'invalid_token_type') {
               // console.log('AuthContext: Authentication error during periodic refresh, redirecting to login');
               localStorage.removeItem('accessToken');
-              localStorage.removeItem('refreshToken');
               navigate('/login?reason=session_expired');
             }
           }
@@ -222,7 +217,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
                     refreshError.message === 'invalid_token_type') {
                   console.error('AuthContext: Authentication error during initialization refresh, user needs to login again');
                   localStorage.removeItem('accessToken');
-                  localStorage.removeItem('refreshToken');
                   setIsLoading(false);
                   return;
                 }
@@ -232,7 +226,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
               if (timeUntilExpiry <= 0) {
                 console.error('AuthContext: Token is expired and refresh failed, user needs to login again');
                 localStorage.removeItem('accessToken');
-                localStorage.removeItem('refreshToken');
                 setIsLoading(false);
                 return;
               }
@@ -254,7 +247,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
                   refreshError.message === 'invalid_token_type') {
                 console.error('AuthContext: Authentication error during initialization refresh, user needs to login again');
                 localStorage.removeItem('accessToken');
-                localStorage.removeItem('refreshToken');
                 setIsLoading(false);
                 return;
               }
@@ -304,7 +296,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             console.error('AuthContext: Authentication error (401) when fetching user data');
             // Clear tokens if user data fetch fails due to authentication
             localStorage.removeItem('accessToken');
-            localStorage.removeItem('refreshToken');
           } else {
             console.error('AuthContext: Non-authentication error when fetching user data:',
               fetchError.message || 'Unknown error');
@@ -314,7 +305,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       } catch (error) {
         console.error('AuthContext: Auth initialization error:', error);
         localStorage.removeItem('accessToken');
-        localStorage.removeItem('refreshToken');
       } finally {
         setIsLoading(false);
         // console.log('AuthContext: Authentication initialization completed');
@@ -386,7 +376,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       // Clear tokens from localStorage
       // console.log('AuthContext: Clearing tokens from localStorage');
       localStorage.removeItem('accessToken');
-      localStorage.removeItem('refreshToken');
       
       // Clear user state
       setUser(null);

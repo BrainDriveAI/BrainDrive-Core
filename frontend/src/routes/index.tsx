@@ -1,6 +1,7 @@
 import { createBrowserRouter, Navigate, RouteObject } from 'react-router-dom';
 import { lazy, Suspense } from 'react';
 import ErrorBoundary from '../components/ErrorBoundary';
+import { useAuth } from '../contexts/AuthContext';
 
 // Lazy load components for better performance
 const Login = lazy(() => import('../pages/Login'));
@@ -23,9 +24,8 @@ const LoadingFallback = () => (
 
 // Auth guard HOC
 const AuthGuard = ({ children }: { children: React.ReactNode }) => {
-  // TODO: Implement actual auth check
-  const isAuthenticated = true; // Replace with actual auth check
-  
+  const { isAuthenticated } = useAuth();
+
   if (!isAuthenticated) {
     return <Navigate to="/login" replace />;
   }

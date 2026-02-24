@@ -19,9 +19,9 @@ from typing import Any, Dict, Iterable, Optional
 import httpx
 
 
-DEFAULT_API_BASE = os.getenv("BRAINDRIVE_API_BASE", "http://10.1.2.149:8205")
-DEFAULT_EMAIL = os.getenv("BRAINDRIVE_EMAIL", "aaaa@gmail.com")
-DEFAULT_PASSWORD = os.getenv("BRAINDRIVE_PASSWORD", "10012002")
+DEFAULT_API_BASE = os.getenv("BRAINDRIVE_API_BASE", "http://localhost:8005")
+DEFAULT_EMAIL = os.getenv("BRAINDRIVE_EMAIL", "")
+DEFAULT_PASSWORD = os.getenv("BRAINDRIVE_PASSWORD", "")
 
 
 def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:

@@ -211,10 +211,16 @@ def truncate_user_agent(user_agent: Optional[str], max_length: int = 500) -> Opt
 def get_client_ip(request) -> Optional[str]:
     """
     Extract client IP address from request, handling proxies.
-    
+
+    SECURITY NOTE: This function trusts X-Forwarded-For unconditionally.
+    In production behind Cloud Run's load balancer, FORWARDED_ALLOW_IPS
+    is set to "*" so Uvicorn accepts the header. Cloud Run's ingress
+    overwrites X-Forwarded-For, making this safe. If deployed behind a
+    different proxy, restrict FORWARDED_ALLOW_IPS to the proxy's IP(s).
+
     Args:
         request: FastAPI/Starlette request object
-        
+
     Returns:
         Client IP address or None
     """

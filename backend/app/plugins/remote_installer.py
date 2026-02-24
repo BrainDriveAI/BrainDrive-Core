@@ -25,6 +25,42 @@ from .service_installler.service_runtime_extractor import extract_required_servi
 
 logger = structlog.get_logger()
 
+
+def _safe_extract_tar(tar: tarfile.TarFile, extract_dir: Path) -> None:
+    """Extract tar archive with path traversal protection."""
+    resolved_root = extract_dir.resolve()
+    for member in tar.getmembers():
+        member_path = (extract_dir / member.name).resolve()
+        if not str(member_path).startswith(str(resolved_root)):
+            raise tarfile.TarError(
+                f"Path traversal detected: {member.name}"
+            )
+        if member.issym() or member.islnk():
+            link_target = Path(member.linkname)
+            if link_target.is_absolute():
+                raise tarfile.TarError(
+                    f"Absolute symlink detected: {member.name} -> {member.linkname}"
+                )
+            resolved_link = (extract_dir / member.name).parent.joinpath(member.linkname).resolve()
+            if not str(resolved_link).startswith(str(resolved_root)):
+                raise tarfile.TarError(
+                    f"Symlink escape detected: {member.name} -> {member.linkname}"
+                )
+    tar.extractall(extract_dir)
+
+
+def _safe_extract_zip(zf: zipfile.ZipFile, extract_dir: Path) -> None:
+    """Extract zip archive with path traversal protection."""
+    resolved_root = extract_dir.resolve()
+    for info in zf.infolist():
+        member_path = (extract_dir / info.filename).resolve()
+        if not str(member_path).startswith(str(resolved_root)):
+            raise zipfile.BadZipFile(
+                f"Path traversal detected: {info.filename}"
+            )
+    zf.extractall(extract_dir)
+
+
 class RemotePluginInstaller:
     """Handles downloading and installing plugins from remote sources"""
 
@@ -609,11 +645,11 @@ class RemotePluginInstaller:
             try:
                 if filename.endswith('.tar.gz') or filename.endswith('.tgz'):
                     with tarfile.open(file_path, 'r:gz') as tar:
-                        tar.extractall(extract_dir)
+                        _safe_extract_tar(tar, extract_dir)
                         logger.info(f"Successfully extracted tar.gz archive")
                 elif filename.endswith('.zip'):
                     with zipfile.ZipFile(file_path, 'r') as zip_file:
-                        zip_file.extractall(extract_dir)
+                        _safe_extract_zip(zip_file, extract_dir)
                         logger.info(f"Successfully extracted zip archive")
                 else:
                     logger.error(f"Unsupported archive format: {filename}")
@@ -676,11 +712,11 @@ class RemotePluginInstaller:
             try:
                 if filename.lower().endswith(('.tar.gz', '.tgz')):
                     with tarfile.open(file_path, 'r:gz') as tar:
-                        tar.extractall(extract_dir)
+                        _safe_extract_tar(tar, extract_dir)
                         logger.info(f"Successfully extracted tar.gz archive")
                 elif filename.lower().endswith('.zip'):
                     with zipfile.ZipFile(file_path, 'r') as zip_file:
-                        zip_file.extractall(extract_dir)
+                        _safe_extract_zip(zip_file, extract_dir)
                         logger.info(f"Successfully extracted zip archive")
                 elif filename.lower().endswith('.rar'):
                     # Note: RAR extraction requires additional library (rarfile)

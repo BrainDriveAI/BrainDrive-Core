@@ -1034,10 +1034,14 @@ async def serve_plugin_static(
     auth: AuthContext = Depends(require_user)
 ):
     """Serve static files from plugin directory."""
+    # Path traversal protection: reject any path containing directory traversal
+    if '..' in path or path.startswith('/') or '\\' in path:
+        raise HTTPException(status_code=403, detail="Access denied")
+
     # Skip if the path starts with "modules/" to avoid catching module endpoints
     if path.startswith("modules/"):
         raise HTTPException(status_code=404, detail="File not found")
-    
+
     # Skip if the path starts with "update/" to avoid catching update endpoints
     if path.startswith("update/"):
         raise HTTPException(status_code=404, detail="File not found")
@@ -1128,7 +1132,7 @@ async def serve_plugin_static(
         if plugin_path.exists():
             logger.debug(f"Found file at: {plugin_path}")
             return FileResponse(plugin_path)
-    
+
     # If we get here, the file wasn't found in any of the possible locations
     logger.error(f"File not found in any location. Tried: {[str(p) for p in possible_paths]}")
     raise HTTPException(status_code=404, detail="File not found")
@@ -1143,14 +1147,18 @@ async def serve_plugin_static_public(
     This endpoint is specifically for serving JavaScript bundles and other
     static assets needed for the frontend to load plugins.
     """
+    # Path traversal protection: reject any path containing directory traversal
+    if '..' in path or path.startswith('/') or '\\' in path:
+        raise HTTPException(status_code=403, detail="Access denied")
+
     # Only allow specific file extensions for security
     allowed_extensions = ['.js', '.css', '.map', '.json', '.woff', '.woff2', '.ttf', '.eot', '.svg', '.png', '.jpg', '.jpeg', '.gif']
     file_ext = Path(path).suffix.lower()
-    
+
     if file_ext not in allowed_extensions:
         logger.warning(f"Attempted to access disallowed file type: {file_ext}")
         raise HTTPException(status_code=403, detail="File type not allowed")
-    
+
     # Skip if the path starts with "modules/" to avoid catching module endpoints
     if path.startswith("modules/"):
         raise HTTPException(status_code=404, detail="File not found")

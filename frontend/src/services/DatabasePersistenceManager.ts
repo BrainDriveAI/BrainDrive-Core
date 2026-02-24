@@ -164,7 +164,7 @@ class DatabasePersistenceManagerImpl extends AbstractBaseService implements Data
     };
 
     // Add authentication token if available
-    const token = localStorage.getItem('access_token');
+    const token = localStorage.getItem('accessToken');
     if (token) {
       defaultHeaders['Authorization'] = `Bearer ${token}`;
     }

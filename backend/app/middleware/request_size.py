@@ -43,34 +43,33 @@ class RequestSizeMiddleware(BaseHTTPMiddleware):
             "/api/v1/plugins/install",  # Plugin uploads
         }
     
+    # Hard cap for excluded paths (50 MB)
+    EXCLUDED_HARD_CAP = 50 * 1024 * 1024
+
     async def dispatch(self, request: Request, call_next):
         """
         Check request size before processing.
-        
+
         Args:
             request: Incoming request
             call_next: Next middleware/handler in chain
-            
+
         Returns:
             Response from handler or 413 error
         """
-        # Skip check for excluded paths
         request_path = request.url.path
-        for excluded in self.excluded_paths:
-            if request_path.startswith(excluded):
-                return await call_next(request)
-        
-        # Check Content-Length header
         content_length = request.headers.get("Content-Length")
-        
+
+        # Determine the applicable limit
+        is_excluded = any(request_path.startswith(p) for p in self.excluded_paths)
+        effective_limit = self.EXCLUDED_HARD_CAP if is_excluded else self.max_size
+
         if content_length:
             try:
                 size = int(content_length)
-                
-                if size > self.max_size:
+                if size > effective_limit:
                     size_mb = size / (1024 * 1024)
-                    limit_mb = self.max_size / (1024 * 1024)
-                    
+                    limit_mb = effective_limit / (1024 * 1024)
                     logger.warning(
                         "Request size exceeded",
                         path=request_path,
@@ -78,7 +77,6 @@ class RequestSizeMiddleware(BaseHTTPMiddleware):
                         limit_mb=f"{limit_mb:.2f}",
                         client=request.client.host if request.client else "unknown"
                     )
-                    
                     return JSONResponse(
                         status_code=413,
                         content={
@@ -86,9 +84,25 @@ class RequestSizeMiddleware(BaseHTTPMiddleware):
                         }
                     )
             except ValueError:
-                # Invalid Content-Length header - let it through, will fail downstream
                 pass
-        
-        # Request is within size limit, continue processing
+        elif request.method in ("POST", "PUT", "PATCH") and not is_excluded:
+            # No Content-Length header on mutating requests -- enforce limit via body read
+            body = await request.body()
+            if len(body) > effective_limit:
+                size_mb = len(body) / (1024 * 1024)
+                limit_mb = effective_limit / (1024 * 1024)
+                logger.warning(
+                    "Request body exceeded limit (no Content-Length)",
+                    path=request_path,
+                    size_mb=f"{size_mb:.2f}",
+                    limit_mb=f"{limit_mb:.2f}",
+                )
+                return JSONResponse(
+                    status_code=413,
+                    content={
+                        "detail": f"Request body too large. Maximum size is {limit_mb:.1f}MB"
+                    }
+                )
+
         return await call_next(request)
 

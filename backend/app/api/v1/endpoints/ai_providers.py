@@ -30,6 +30,7 @@ from app.ai_providers.registry import provider_registry
 from app.ai_providers.ollama import OllamaProvider
 from app.utils.json_parsing import safe_encrypted_json_parse, validate_ollama_settings_format, create_default_ollama_settings
 from app.core.encryption import encryption_service, EncryptionError
+from app.core.config import settings
 from app.core.user_initializer.library_template import resolve_library_root_path
 from app.schemas.ai_providers import (
     TextGenerationRequest,
@@ -40,7 +41,7 @@ from app.utils.persona_utils import apply_persona_prompt_and_params
 from app.services.mcp_registry_service import MCPRegistryService, infer_safety_class
 
 # Flag to enable/disable test routes (set to False in production)
-TEST_ROUTES_ENABLED = os.getenv("ENABLE_TEST_ROUTES", "True").lower() == "true"
+TEST_ROUTES_ENABLED = settings.ENABLE_TEST_ROUTES
 
 router = APIRouter()
 MODULE_LOGGER = logging.getLogger(__name__)
@@ -8481,7 +8482,7 @@ async def get_provider_instance_from_request(request, db):
 
 
 @router.get("/providers")
-async def get_providers():
+async def get_providers(auth: AuthContext = Depends(require_user)):
     """Get list of available AI providers."""
     return {
         "providers": provider_registry.get_available_providers()
@@ -8650,7 +8651,7 @@ async def get_provider_catalog(
 
 
 @router.post("/validate")
-async def validate_provider(request: ValidationRequest):
+async def validate_provider(request: ValidationRequest, auth: AuthContext = Depends(require_user)):
     """Validate connection to a provider."""
     try:
         provider_name = request.provider
@@ -8840,10 +8841,8 @@ async def get_models(
     except HTTPException:
         raise
     except Exception as e:
-        print(f"Error in get_models: {e}")
-        import traceback
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=str(e))
+        MODULE_LOGGER.error(f"Error in get_models: {e}")
+        raise HTTPException(status_code=500, detail="Failed to retrieve models")
 
 
 @router.get("/all-models")
@@ -9129,14 +9128,12 @@ async def get_all_models(
     except HTTPException:
         raise
     except Exception as e:
-        print(f"Error in get_all_models: {e}")
-        import traceback
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=str(e))
+        MODULE_LOGGER.error(f"Error in get_all_models: {e}")
+        raise HTTPException(status_code=500, detail="Failed to retrieve models")
 
 
 @router.post("/generate")
-async def generate_text(request: TextGenerationRequest, db: AsyncSession = Depends(get_db)):
+async def generate_text(request: TextGenerationRequest, db: AsyncSession = Depends(get_db), auth: AuthContext = Depends(require_user)):
     """Generate text from a prompt.
     
     Uses the 'stream' parameter to determine whether to return a streaming or batch response.
@@ -9186,7 +9183,7 @@ async def generate_text(request: TextGenerationRequest, db: AsyncSession = Depen
 
 
 @router.post("/cancel")
-async def cancel_generation(request: dict = Body(...)):
+async def cancel_generation(request: dict = Body(...), auth: AuthContext = Depends(require_user)):
     """Cancel ongoing generation for a conversation."""
     # TODO: Complete backend cancellation logic here
     return {
@@ -9197,7 +9194,7 @@ async def cancel_generation(request: dict = Body(...)):
         }
 
 @router.post("/chat")
-async def chat_completion(request: ChatCompletionRequest, db: AsyncSession = Depends(get_db)):
+async def chat_completion(request: ChatCompletionRequest, db: AsyncSession = Depends(get_db), auth: AuthContext = Depends(require_user)):
     """Generate a chat completion.
     
     Uses the 'stream' parameter to determine whether to return a streaming or batch response.
@@ -9205,16 +9202,7 @@ async def chat_completion(request: ChatCompletionRequest, db: AsyncSession = Dep
     """
     logger = logging.getLogger(__name__)
     try:
-        print(f"🎯 CHAT COMPLETION ENDPOINT CALLED")
-        print(f"📊 Provider: {request.provider}")
-        print(f"📊 Settings ID: {request.settings_id}")
-        print(f"📊 Server ID: {request.server_id}")
-        print(f"📊 Model: {request.model}")
-        print(f"📊 User ID: {request.user_id}")
-        print(f"📊 Stream: {request.stream}")
-        MODULE_LOGGER.info(f"Production chat endpoint called with: provider={request.provider}, settings_id={request.settings_id}, server_id={request.server_id}, model={request.model}")
-        logger.debug(f"Messages: {request.messages}")
-        logger.debug(f"Params: {request.params}")
+        MODULE_LOGGER.info(f"Chat endpoint called: provider={request.provider}, model={request.model}")
         
         # Validate persona data if provided
         if request.persona_id or request.persona_system_prompt or request.persona_model_settings:

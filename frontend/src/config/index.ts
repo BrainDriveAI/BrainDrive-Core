@@ -55,8 +55,8 @@ const getApiBaseUrl = () => {
 		return "http://127.0.0.1:8005"; // Direct connection to backend
 	}
 
-	// Production fallback
-	return "http://localhost:8005";
+	// Production fallback -- same-origin (behind reverse proxy)
+	return "";
 };
 
 // Application configuration

@@ -53,9 +53,9 @@ function AppRoutes() {
         <Route path="pages/*" element={<DynamicRoutes />} />
         {/* Custom navigation routes - handled by RouteContentRenderer */}
         <Route path=":route" element={<RouteContentRenderer />} />
+        {/* Catch-all route for direct URLs - inside PrivateRoute */}
+        <Route path="*" element={<DynamicPageRenderer />} />
       </Route>
-      {/* Catch-all route for direct URLs */}
-      <Route path="*" element={<DynamicPageRenderer />} />
     </Routes>
   );
 }

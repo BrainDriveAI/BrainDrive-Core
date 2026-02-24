@@ -205,8 +205,11 @@ async def get_conversation_messages(
     conversation = await Conversation.get_by_id(db, conversation_id)
     if not conversation:
         raise HTTPException(status_code=404, detail="Conversation not found")
-    
-    # Ownership check done by get_user_conversation helper
+
+    # Verify ownership
+    if str(conversation.user_id).replace('-', '') != str(auth.user_id).replace('-', ''):
+        raise HTTPException(status_code=403, detail="Access denied")
+
     messages = await Message.get_by_conversation_id(db, conversation_id, skip, limit)
     return messages
 
@@ -222,8 +225,11 @@ async def create_message(
     conversation = await Conversation.get_by_id(db, conversation_id)
     if not conversation:
         raise HTTPException(status_code=404, detail="Conversation not found")
-    
-    # Ownership check done by get_user_conversation helper
+
+    # Verify ownership
+    if str(conversation.user_id).replace('-', '') != str(auth.user_id).replace('-', ''):
+        raise HTTPException(status_code=403, detail="Access denied")
+
     db_message = Message(
         id=str(uuid.uuid4()),  # Generate ID with dashes
         conversation_id=conversation_id,  # Use conversation_id as provided
@@ -253,10 +259,13 @@ async def get_conversation_with_messages(
     conversation = await Conversation.get_by_id(db, conversation_id)
     if not conversation:
         raise HTTPException(status_code=404, detail="Conversation not found")
-    
-    # Ownership check done by get_user_conversation helper
+
+    # Verify ownership
+    if str(conversation.user_id).replace('-', '') != str(auth.user_id).replace('-', ''):
+        raise HTTPException(status_code=403, detail="Access denied")
+
     messages = await Message.get_by_conversation_id(db, conversation_id, skip, limit)
-    
+
     # Get tags for the conversation
     tags = await conversation.get_tags(db)
     

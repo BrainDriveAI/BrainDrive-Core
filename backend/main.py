@@ -115,6 +115,20 @@ def _warn_if_env_missing() -> None:
 
 def _enforce_encryption_key() -> None:
     key = settings.ENCRYPTION_MASTER_KEY.strip() if settings.ENCRYPTION_MASTER_KEY else ""
+    # Reject known placeholder values in non-dev environments
+    known_placeholder_keys = {
+        "your-encryption-master-key-here",
+        "change-me",
+        "encryption-key",
+        "",
+    }
+    if settings.APP_ENV.lower() != "dev" and key.lower() in known_placeholder_keys:
+        message = (
+            "ENCRYPTION_MASTER_KEY is not configured for production. "
+            "Set a strong, unique ENCRYPTION_MASTER_KEY (32+ chars) before deploying."
+        )
+        logger.critical(message)
+        raise RuntimeError(message)
     if key:
         if len(key) < 32:
             logger.warning("ENCRYPTION_MASTER_KEY is shorter than 32 characters", length=len(key))
@@ -130,6 +144,36 @@ def _enforce_encryption_key() -> None:
 
 _warn_if_env_missing()
 _enforce_encryption_key()
+
+
+def _validate_production_config() -> None:
+    """Validate configuration is safe for production deployment."""
+    if settings.APP_ENV.lower() == "dev":
+        return
+
+    known_defaults = {"your-secret-key-here", "change-me", "secret", ""}
+    if settings.SECRET_KEY in known_defaults:
+        message = (
+            "SECRET_KEY is not configured for production. "
+            "Set a strong, unique SECRET_KEY environment variable before deploying."
+        )
+        logger.critical(message)
+        raise RuntimeError(message)
+
+    if settings.DEBUG:
+        logger.warning(
+            "DEBUG=True in non-dev environment",
+            app_env=settings.APP_ENV,
+        )
+
+    if settings.ENABLE_TEST_ROUTES:
+        logger.warning(
+            "ENABLE_TEST_ROUTES=True in non-dev environment",
+            app_env=settings.APP_ENV,
+        )
+
+
+_validate_production_config()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -189,7 +233,9 @@ app = FastAPI(
     title=settings.APP_NAME,
     version="1.0.0",
     lifespan=lifespan,
-    docs_url="/api/v1/docs"
+    docs_url="/api/v1/docs" if settings.ENABLE_API_DOCS else None,
+    redoc_url="/api/v1/redoc" if settings.ENABLE_API_DOCS else None,
+    openapi_url="/api/v1/openapi.json" if settings.ENABLE_API_DOCS else None,
 )
 
 log = logging.getLogger("uvicorn")
@@ -240,6 +286,27 @@ else:
 
 log.info(f"CORS configured for environment: {settings.APP_ENV}")
 
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    """Add security headers to all responses."""
+    async def dispatch(self, request: Request, call_next):
+        response = await call_next(request)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["X-XSS-Protection"] = "1; mode=block"
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        if settings.APP_ENV.lower() != "dev":
+            response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+            response.headers["Content-Security-Policy"] = (
+                "default-src 'self'; "
+                "script-src 'self' 'unsafe-inline' 'unsafe-eval'; "
+                "style-src 'self' 'unsafe-inline'; "
+                "img-src 'self' data: blob:; "
+                "connect-src 'self' ws: wss:; "
+                "font-src 'self' data:; "
+                "frame-ancestors 'none'"
+            )
+        return response
+
 class LoggingMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         logger.info("Request received", method=request.method, path=request.url.path)
@@ -247,10 +314,10 @@ class LoggingMiddleware(BaseHTTPMiddleware):
         logger.info("Response sent", path=request.url.path, status_code=response.status_code)
         return response
 
-# ✅ 3. Allow All Hosts for Development (Fix 403 Issues)
+# Trusted host validation: permissive in dev, strict in production
 app.add_middleware(
-    TrustedHostMiddleware, 
-    allowed_hosts=["*"]  # Allow all hosts (change in production)
+    TrustedHostMiddleware,
+    allowed_hosts=["*"] if settings.APP_ENV == "dev" else settings.ALLOWED_HOSTS,
 )
 
 # ✅ 3.5. Request ID for correlation and audit logging
@@ -263,6 +330,7 @@ app.add_middleware(
 )
 
 app.add_middleware(LoggingMiddleware)
+app.add_middleware(SecurityHeadersMiddleware)
 # app.add_middleware(GZipMiddleware)
 # app.add_middleware(ConditionalGZipMiddleware)
 
@@ -300,21 +368,23 @@ if settings.USE_REDIS:
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
-    logger.error(f"Global exception: {exc}")
+    logger.error("Unhandled exception", method=request.method, path=request.url.path, error=str(exc), exception_type=type(exc).__name__)
     return JSONResponse(
         status_code=500,
         content={"detail": "Internal server error"}
     )
 
 @app.exception_handler(RequestValidationError)
-async def validation_exception_handler(request, exc):
-    import logging
-    logging.error(f"Validation Error: {exc.errors()}")
-    logging.error(f"Request Body: {exc.body}")
-    
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    """Handle validation errors (body content redacted to prevent data leakage)."""
+    logger.warning("Validation error", method=request.method, path=request.url.path)
+    safe_errors = [
+        {"loc": e.get("loc"), "msg": e.get("msg"), "type": e.get("type")}
+        for e in exc.errors()
+    ]
     return JSONResponse(
         status_code=422,
-        content={"detail": exc.errors(), "body": exc.body},
+        content={"detail": safe_errors},
     )
 
 @app.get("/health")

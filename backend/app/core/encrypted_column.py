@@ -93,15 +93,23 @@ class EncryptedType(TypeDecorator):
             return encrypted_value
             
         except EncryptionError as e:
+            import os
+            app_env = os.getenv("APP_ENV", "production")
+            if app_env.lower() != "dev":
+                logger.error(
+                    "Encryption failed for %s.%s in production -- refusing to store plaintext. Reason: %s",
+                    self.table_name,
+                    self.field_name,
+                    e,
+                )
+                raise
             logger.exception(
-                "Failed to encrypt %s.%s (storing plaintext fallback). Reason: %s | value=%s",
+                "Failed to encrypt %s.%s (storing plaintext fallback in dev mode). Reason: %s | value=%s",
                 self.table_name,
                 self.field_name,
                 e,
                 _summarize_value(value),
             )
-            # In production, you might want to raise the error
-            # For now, we'll store the value unencrypted as fallback
             import json
             if isinstance(value, (dict, list)):
                 return json.dumps(value, ensure_ascii=False, separators=(',', ':'))
@@ -163,14 +171,23 @@ class EncryptedType(TypeDecorator):
                     return value
                     
         except EncryptionError as e:
+            import os
+            app_env = os.getenv("APP_ENV", "production")
+            if app_env.lower() != "dev":
+                logger.error(
+                    "Decryption failed for %s.%s in production -- refusing plaintext fallback. Reason: %s",
+                    self.table_name,
+                    self.field_name,
+                    e,
+                )
+                raise
             logger.exception(
-                "Failed to decrypt %s.%s. Returning raw value. Reason: %s | value=%s",
+                "Failed to decrypt %s.%s (returning raw value in dev mode). Reason: %s | value=%s",
                 self.table_name,
                 self.field_name,
                 e,
                 _summarize_value(value),
             )
-            # Return the raw value as fallback
             try:
                 import json
                 return json.loads(value)

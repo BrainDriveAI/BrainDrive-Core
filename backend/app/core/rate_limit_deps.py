@@ -17,13 +17,19 @@ from app.core.auth_deps import optional_user
 def _get_client_ip(request: Request) -> str:
     """
     Extract client IP from request, handling proxies.
-    
+
     Checks X-Forwarded-For header first (for proxied requests),
     then falls back to direct client host.
-    
+
+    SECURITY NOTE: This function trusts X-Forwarded-For unconditionally.
+    In production behind Cloud Run's load balancer, FORWARDED_ALLOW_IPS
+    is set to "*" so Uvicorn accepts the header. This is safe because
+    Cloud Run's ingress overwrites X-Forwarded-For. If deployed behind a
+    different proxy, restrict FORWARDED_ALLOW_IPS to the proxy's IP(s).
+
     Args:
         request: FastAPI Request object
-        
+
     Returns:
         Client IP address as string
     """

@@ -126,7 +126,8 @@ async def ensure_ollama_settings_definition(db: AsyncSession):
 async def test_ollama_connection(
     server_url: str,
     api_key: Optional[str] = None,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    auth: AuthContext = Depends(require_user)
 ):
     """
     Test connection to an Ollama server by checking its version endpoint
@@ -259,14 +260,27 @@ async def ollama_passthrough(
         method = request_data.get("method", "GET").upper()
         api_key = request_data.get("api_key")
         payload = request_data.get("payload", {})
-        
+
         # Validate required parameters
         if not server_url or not endpoint:
             raise HTTPException(
                 status_code=400,
                 detail="server_url and endpoint are required"
             )
-            
+
+        # Validate endpoint to prevent path traversal
+        if '..' in endpoint or endpoint.startswith('/') or '://' in endpoint:
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid endpoint path"
+            )
+        _ALLOWED_PREFIXES = ("api/", "v1/")
+        if not any(endpoint.startswith(p) for p in _ALLOWED_PREFIXES):
+            raise HTTPException(
+                status_code=400,
+                detail="Endpoint must start with one of: api/, v1/"
+            )
+
         # Clean and validate the URL
         server_url = unquote(server_url).strip()
         if not server_url.startswith(('http://', 'https://')):
@@ -327,7 +341,8 @@ async def ollama_passthrough(
 @router.post("/stream")
 async def ollama_stream(
     request_data: Dict[str, Any] = Body(...),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    auth: AuthContext = Depends(require_user)
 ):
     """
     Streaming endpoint for Ollama API requests
@@ -413,7 +428,8 @@ async def ollama_stream(
 async def get_ollama_models(
     server_url: str,
     api_key: Optional[str] = None,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    auth: AuthContext = Depends(require_user)
 ):
     """
     Get a list of available models from an Ollama server
@@ -600,7 +616,8 @@ async def cancel_install(
 @router.delete("/delete")
 async def delete_ollama_model(
     request: ModelDeleteRequest,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    auth: AuthContext = Depends(require_user)
 ):
     """
     Delete a model from the Ollama server

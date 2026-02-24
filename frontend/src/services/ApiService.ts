@@ -255,7 +255,6 @@ class ApiService extends AbstractBaseService {
               // If we don't have a valid token, we need to redirect
               // console.log('ApiService interceptor: No valid token available, redirecting to login');
               localStorage.removeItem('accessToken');
-              localStorage.removeItem('refreshToken');
               window.location.href = '/login?reason=no_valid_token';
             }
           } else if (refreshError instanceof Error) {
@@ -263,17 +262,14 @@ class ApiService extends AbstractBaseService {
             if (refreshError.message === 'account_not_found') {
               console.error('ApiService interceptor: User account not found during refresh');
               localStorage.removeItem('accessToken');
-              localStorage.removeItem('refreshToken');
               window.location.href = '/login?reason=account_not_found';
             } else if (refreshError.message === 'token_expired') {
               console.error('ApiService interceptor: Token expired during refresh');
               localStorage.removeItem('accessToken');
-              localStorage.removeItem('refreshToken');
               window.location.href = '/login?reason=token_expired';
             } else if (refreshError.message === 'invalid_token_type') {
               console.error('ApiService interceptor: Invalid token type during refresh');
               localStorage.removeItem('accessToken');
-              localStorage.removeItem('refreshToken');
               window.location.href = '/login?reason=invalid_token';
             } else {
               // For other errors (like authentication errors)
@@ -281,7 +277,6 @@ class ApiService extends AbstractBaseService {
               
               // Clear tokens for authentication errors
               localStorage.removeItem('accessToken');
-              localStorage.removeItem('refreshToken');
               
               // If refresh token is invalid, redirect to login with a reason
               // console.log('ApiService interceptor: Redirecting to login page');
@@ -291,7 +286,6 @@ class ApiService extends AbstractBaseService {
             // For non-Error objects
             // console.log('ApiService interceptor: Unknown error during refresh');
             localStorage.removeItem('accessToken');
-            localStorage.removeItem('refreshToken');
             window.location.href = '/login?reason=unknown_error';
           }
           
@@ -319,40 +313,18 @@ class ApiService extends AbstractBaseService {
 
     const refreshPromise = (async () => {
       try {
-        // Get stored refresh token if available (for fallback)
-        const storedRefreshToken = localStorage.getItem('refreshToken');
-        
-        if (!storedRefreshToken) {
-          console.warn('ApiService: No refresh token found in localStorage for fallback');
-        } else {
-          // console.log('ApiService: Found refresh token in localStorage for fallback');
-          // console.log(`ApiService: Refresh token length: ${storedRefreshToken.length}`);
-        }
-        
         // Create a request cancellation token
         const cancelToken = axios.CancelToken.source();
-        
+
         // Set up a timeout to cancel the request if it takes too long
         const requestTimeout = setTimeout(() => {
           cancelToken.cancel('Request took too long');
-        }, 25000); // Increased to 25 seconds
-        
-        // Prepare request body with refresh token
-        const requestBody = storedRefreshToken ? { refresh_token: storedRefreshToken } : {};
-        
-        // Send refresh request with HTTP-only cookie and also include token in body as fallback
-        // console.log('ApiService: Sending refresh request with HTTP-only cookie and fallback token in body');
-        // console.log('ApiService: Request body contains refresh_token:', !!storedRefreshToken);
-        
-        // Log the actual refresh token (first 10 chars only for security)
-        if (storedRefreshToken) {
-          const tokenPreview = storedRefreshToken.substring(0, 10) + '...';
-          // console.log(`ApiService: Using refresh token (preview): ${tokenPreview}`);
-        }
-        
+        }, 25000);
+
+        // Send refresh request -- relies on HTTP-only cookie only (no body token)
         const response = await this.api.post<AuthResponse>(
           '/api/v1/auth/refresh',
-          requestBody,
+          {},
           {
             withCredentials: true, // Important for sending cookies
             timeout: 25000, // 25 second timeout for the request itself
@@ -367,48 +339,18 @@ class ApiService extends AbstractBaseService {
         // Clear the request timeout
         clearTimeout(requestTimeout);
         
-        // Extract and store new tokens
         const {
           access_token,
-          refresh_token,
           expires_in,
-          refresh_expires_in,
-          issued_at,
-          user_id
         } = response.data;
-        
-        // console.log('ApiService: Received new access token');
-        // console.log(`ApiService: Token expires in: ${expires_in || 'unknown'} seconds`);
-        
-        if (issued_at) {
-          const issuedDate = new Date(issued_at * 1000);
-          // console.log(`ApiService: Token issued at: ${issuedDate.toISOString()}`);
-        }
-        
+
         // Store access token in localStorage
         localStorage.setItem('accessToken', access_token);
-        
+
         // Store token expiration time
         if (expires_in) {
           const expiresAt = Date.now() + (expires_in * 1000);
           localStorage.setItem('tokenExpiresAt', expiresAt.toString());
-          // console.log(`ApiService: Access token expires at: ${new Date(expiresAt).toISOString()}`);
-        }
-        
-        // Store refresh token in localStorage as fallback
-        if (refresh_token) {
-          // console.log('ApiService: Storing refresh token in localStorage as fallback');
-          // console.log(`ApiService: Refresh token length: ${refresh_token.length}`);
-          localStorage.setItem('refreshToken', refresh_token);
-          
-          // Store refresh token expiration time
-          if (refresh_expires_in) {
-            const refreshExpiresAt = Date.now() + (refresh_expires_in * 1000);
-            localStorage.setItem('refreshTokenExpiresAt', refreshExpiresAt.toString());
-            // console.log(`ApiService: Refresh token expires at: ${new Date(refreshExpiresAt).toISOString()}`);
-          }
-        } else {
-          console.warn('ApiService: No refresh token in response - this may cause authentication issues');
         }
         
         // console.log('ApiService: Token refresh successful');
@@ -420,8 +362,6 @@ class ApiService extends AbstractBaseService {
         if (error instanceof AxiosError) {
           console.error('ApiService: Refresh error details:', {
             status: error.response?.status,
-            data: error.response?.data,
-            headers: error.response?.headers,
             message: error.message
           });
           
@@ -464,7 +404,7 @@ class ApiService extends AbstractBaseService {
               }
               
               // Enhanced cookie clearing with multiple domain/path combinations
-              const domains = ['', 'localhost', '127.0.0.1', '10.0.2.149', '.localhost', '.127.0.0.1'];
+              const domains = ['', 'localhost', '127.0.0.1', '.localhost', '.127.0.0.1'];
               const paths = ['/', '/api', '/api/v1', ''];
               
               // Get all existing cookies
@@ -492,7 +432,6 @@ class ApiService extends AbstractBaseService {
             } else if (errorDetail.includes('user not found')) {
               console.error('ApiService: User not found during token refresh - account may have been deleted');
               localStorage.removeItem('accessToken');
-              localStorage.removeItem('refreshToken');
               
               // Create a custom error with a specific message for the caller to handle
               const customError = new Error('account_not_found');
@@ -501,7 +440,6 @@ class ApiService extends AbstractBaseService {
             } else if (errorDetail.includes('token has expired')) {
               console.error('ApiService: Refresh token has expired');
               localStorage.removeItem('accessToken');
-              localStorage.removeItem('refreshToken');
               
               // Create a custom error with a specific message for the caller to handle
               const customError = new Error('token_expired');
@@ -510,7 +448,6 @@ class ApiService extends AbstractBaseService {
             } else if (errorDetail.includes('not a refresh token')) {
               console.error('ApiService: Invalid token type - not a refresh token');
               localStorage.removeItem('accessToken');
-              localStorage.removeItem('refreshToken');
               
               // Create a custom error with a specific message for the caller to handle
               const customError = new Error('invalid_token_type');
@@ -520,7 +457,6 @@ class ApiService extends AbstractBaseService {
               // Generic authentication error
               // console.log('ApiService: Generic authentication error during refresh');
               localStorage.removeItem('accessToken');
-              localStorage.removeItem('refreshToken');
               
               // Don't redirect here, let the caller decide what to do
               // console.log('ApiService: Not redirecting from refreshToken method, letting caller handle it');
@@ -937,47 +873,17 @@ class ApiService extends AbstractBaseService {
       
       const {
         access_token,
-        refresh_token,
         expires_in,
-        refresh_expires_in,
-        issued_at,
-        user_id,
         user
       } = response.data;
-      
-      // console.log('ApiService: Login successful, processing tokens');
-      // console.log(`ApiService: Token expires in: ${expires_in || 'unknown'} seconds`);
-      
-      if (issued_at) {
-        const issuedDate = new Date(issued_at * 1000);
-        // console.log(`ApiService: Token issued at: ${issuedDate.toISOString()}`);
-      }
-      
+
       // Store access token in localStorage
-      // console.log('ApiService: Storing access token in localStorage');
       localStorage.setItem('accessToken', access_token);
-      
+
       // Store token expiration time
       if (expires_in) {
         const expiresAt = Date.now() + (expires_in * 1000);
         localStorage.setItem('tokenExpiresAt', expiresAt.toString());
-        // console.log(`ApiService: Access token expires at: ${new Date(expiresAt).toISOString()}`);
-      }
-      
-      // Store refresh token in localStorage as fallback
-      if (refresh_token) {
-        // console.log('ApiService: Storing refresh token in localStorage as fallback');
-        // console.log(`ApiService: Refresh token length: ${refresh_token.length}`);
-        localStorage.setItem('refreshToken', refresh_token);
-        
-        // Store refresh token expiration time
-        if (refresh_expires_in) {
-          const refreshExpiresAt = Date.now() + (refresh_expires_in * 1000);
-          localStorage.setItem('refreshTokenExpiresAt', refreshExpiresAt.toString());
-          // console.log(`ApiService: Refresh token expires at: ${new Date(refreshExpiresAt).toISOString()}`);
-        }
-      } else {
-        console.warn('ApiService: No refresh token in response body, relying on HTTP-only cookie - this may cause authentication issues');
       }
       
       // console.log('ApiService: Login successful for user:', user.email);
@@ -994,9 +900,7 @@ class ApiService extends AbstractBaseService {
           status,
           code: error.code,
           message: error.message,
-          details: error.response?.data,
           isServerError: isServerError ? 'Yes' : 'No',
-          isStartupError: isStartupError ? 'Yes - backend might still be starting' : 'No'
         });
       }
       throw error;

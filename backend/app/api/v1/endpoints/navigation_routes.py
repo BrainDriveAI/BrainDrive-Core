@@ -20,6 +20,9 @@ from app.schemas.navigation import (
     NavigationRouteBatchUpdate
 )
 from app.services.navigation_service import get_user_navigation_route, ensure_route_belongs_to_user
+import logging
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -154,35 +157,35 @@ async def get_navigation_routes(
             if visible_only:
                 # Filter visible routes by current user's ID
                 routes = await NavigationRoute.get_visible_routes_by_user(db, auth.user_id)
-                print(f"Found {len(routes)} visible routes for user {auth.user_id}")
+                logger.debug(f"Found {len(routes)} visible routes for user {auth.user_id}")
             else:
                 # Get routes created by the current user
-                print(f"Fetching navigation routes for user {auth.user_id}")
+                logger.debug(f"Fetching navigation routes for user {auth.user_id}")
                 routes = await NavigationRoute.get_by_creator(db, auth.user_id)
-                print(f"Found {len(routes)} total routes for user {auth.user_id}")
+                logger.debug(f"Found {len(routes)} total routes for user {auth.user_id}")
                 
                 # Log each route for debugging
                 for route in routes:
                     try:
-                        print(f"Route: {route.id}, {route.name}, {route.route}, creator: {route.creator_id}")
+                        logger.debug(f"Route: {route.id}, {route.name}, {route.route}, creator: {route.creator_id}")
                     except Exception as e:
-                        print(f"Error logging route: {e}")
+                        logger.error(f"Error logging route: {e}")
             
             # Convert SQLAlchemy model instances to dictionaries with error handling
             for route in routes:
                 try:
                     # Check if all required fields are present
                     if not hasattr(route, 'id') or not route.id:
-                        print(f"Warning: Route missing id field")
+                        logger.warning(f"Route missing id field")
                         continue
                     if not hasattr(route, 'name') or not route.name:
-                        print(f"Warning: Route {route.id} missing name field")
+                        logger.warning(f"Route {route.id} missing name field")
                         continue
                     if not hasattr(route, 'route') or not route.route:
-                        print(f"Warning: Route {route.id} missing route field")
+                        logger.warning(f"Route {route.id} missing route field")
                         continue
                     if not hasattr(route, 'creator_id') or not route.creator_id:
-                        print(f"Warning: Route {route.id} missing creator_id field")
+                        logger.warning(f"Route {route.id} missing creator_id field")
                         continue
                     
                     # Create dictionary with safe access to attributes
@@ -209,14 +212,14 @@ async def get_navigation_routes(
                     }
                     routes_list.append(route_dict)
                 except Exception as e:
-                    print(f"Error processing route: {e}")
+                    logger.error(f"Error processing route: {e}")
                     continue
         except Exception as inner_e:
-            print(f"Inner exception in get_navigation_routes: {inner_e}")
+            logger.error(f"Inner exception in get_navigation_routes: {inner_e}")
             # Return an empty list instead of raising an exception
             return []
         
-        print(f"Returning {len(routes_list)} routes")
+        logger.debug(f"Returning {len(routes_list)} routes")
         return routes_list
     except Exception as e:
         raise HTTPException(
@@ -355,7 +358,10 @@ async def get_navigation_route(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Navigation route with ID {route_id} not found"
             )
-        
+
+        # Ownership check: ensure route belongs to current user
+        ensure_route_belongs_to_user(route, auth)
+
         # Convert SQLAlchemy model instance to dictionary with creator info
         return {
             "id": str(route.id),
@@ -403,20 +409,23 @@ async def update_navigation_route(
     """
     try:
         # Log the incoming request data for debugging
-        print(f"Updating navigation route with ID: {route_id}")
-        print(f"Route data received: {route_data.dict()}")
+        logger.debug(f"Updating navigation route with ID: {route_id}")
+        logger.debug(f"Route data received: {route_data.dict()}")
         # Get existing route
         route = await NavigationRoute.get_by_id(db, route_id)
-        print(f"Route found: {route is not None}")
+        logger.debug(f"Route found: {route is not None}")
         if route:
-            print(f"Route details: id={route.id}, name={route.name}, is_system_route={route.is_system_route}")
+            logger.debug(f"Route details: id={route.id}, name={route.name}, is_system_route={route.is_system_route}")
         
         if not route:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Navigation route with ID {route_id} not found"
             )
-        
+
+        # Ownership check: ensure route belongs to current user
+        ensure_route_belongs_to_user(route, auth)
+
         # Check if route path is being changed and if it already exists
         if route_data.route and route_data.route != route.route:
             existing_route = await NavigationRoute.get_by_route(db, route_data.route)
@@ -428,45 +437,45 @@ async def update_navigation_route(
         
         # Update fields
         if route_data.name is not None:
-            print(f"Updating name from '{route.name}' to '{route_data.name}'")
+            logger.debug(f"Updating name from '{route.name}' to '{route_data.name}'")
             route.name = route_data.name
         if route_data.route is not None:
-            print(f"Updating route from '{route.route}' to '{route_data.route}'")
+            logger.debug(f"Updating route from '{route.route}' to '{route_data.route}'")
             route.route = route_data.route
         if route_data.icon is not None:
-            print(f"Updating icon from '{route.icon}' to '{route_data.icon}'")
+            logger.debug(f"Updating icon from '{route.icon}' to '{route_data.icon}'")
             route.icon = route_data.icon
         if route_data.description is not None:
-            print(f"Updating description from '{route.description}' to '{route_data.description}'")
+            logger.debug(f"Updating description from '{route.description}' to '{route_data.description}'")
             route.description = route_data.description
         if route_data.order is not None:
-            print(f"Updating order from '{route.order}' to '{route_data.order}'")
+            logger.debug(f"Updating order from '{route.order}' to '{route_data.order}'")
             route.order = route_data.order
         if route_data.is_visible is not None:
-            print(f"Updating is_visible from '{route.is_visible}' to '{route_data.is_visible}'")
+            logger.debug(f"Updating is_visible from '{route.is_visible}' to '{route_data.is_visible}'")
             route.is_visible = route_data.is_visible
         if route_data.default_component_id is not None:
             # Check if the route allows changing default component
-            print(f"Updating default_component_id from '{route.default_component_id}' to '{route_data.default_component_id}'")
-            print(f"Can change default: {route.can_change_default}")
+            logger.debug(f"Updating default_component_id from '{route.default_component_id}' to '{route_data.default_component_id}'")
+            logger.debug(f"Can change default: {route.can_change_default}")
             if not route.can_change_default and route.default_component_id is not None and route_data.default_component_id != route.default_component_id:
-                print("Cannot change default component for this route")
+                logger.warning("Cannot change default component for this route")
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail=f"Cannot change default component for this route"
                 )
             route.default_component_id = route_data.default_component_id
         # Handle default_page_id explicitly to allow setting it to null
-        print(f"Handling default_page_id: {route_data.default_page_id}")
-        print(f"Type: {type(route_data.default_page_id)}")
+        logger.debug(f"Handling default_page_id: {route_data.default_page_id}")
+        logger.debug(f"Type: {type(route_data.default_page_id)}")
         
         # Check if default_page_id is in the request data
         if 'default_page_id' in route_data.__dict__:
             # Check if the route allows changing default page
-            print(f"Updating default_page_id from '{route.default_page_id}' to '{route_data.default_page_id}'")
-            print(f"Can change default: {route.can_change_default}")
+            logger.debug(f"Updating default_page_id from '{route.default_page_id}' to '{route_data.default_page_id}'")
+            logger.debug(f"Can change default: {route.can_change_default}")
             if not route.can_change_default and route.default_page_id is not None:
-                print("Cannot change default page for this route")
+                logger.warning("Cannot change default page for this route")
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail=f"Cannot change default page for this route"
@@ -474,49 +483,48 @@ async def update_navigation_route(
             
             # Handle null value explicitly
             if route_data.default_page_id is None:
-                print("Setting default_page_id to NULL")
+                logger.debug("Setting default_page_id to NULL")
                 route.default_page_id = None
             else:
                 # Convert UUID to string before saving to database
-                print(f"Setting default_page_id to {route_data.default_page_id}")
+                logger.debug(f"Setting default_page_id to {route_data.default_page_id}")
                 route.default_page_id = str(route_data.default_page_id)
         if route_data.can_change_default is not None:
-            print(f"Updating can_change_default from '{route.can_change_default}' to '{route_data.can_change_default}'")
+            logger.debug(f"Updating can_change_default from '{route.can_change_default}' to '{route_data.can_change_default}'")
             route.can_change_default = route_data.can_change_default
         
         # Update hierarchical fields
         if route_data.parent_id is not None:
-            print(f"Updating parent_id from '{route.parent_id}' to '{route_data.parent_id}'")
+            logger.debug(f"Updating parent_id from '{route.parent_id}' to '{route_data.parent_id}'")
             route.parent_id = route_data.parent_id
         if route_data.display_order is not None:
-            print(f"Updating display_order from '{route.display_order}' to '{route_data.display_order}'")
+            logger.debug(f"Updating display_order from '{route.display_order}' to '{route_data.display_order}'")
             route.display_order = route_data.display_order
         if route_data.is_collapsible is not None:
-            print(f"Updating is_collapsible from '{route.is_collapsible}' to '{route_data.is_collapsible}'")
+            logger.debug(f"Updating is_collapsible from '{route.is_collapsible}' to '{route_data.is_collapsible}'")
             route.is_collapsible = route_data.is_collapsible
         if route_data.is_expanded is not None:
-            print(f"Updating is_expanded from '{route.is_expanded}' to '{route_data.is_expanded}'")
+            logger.debug(f"Updating is_expanded from '{route.is_expanded}' to '{route_data.is_expanded}'")
             route.is_expanded = route_data.is_expanded
         
         # Special handling for system routes
         if route.is_system_route:
-            print("This is a system route - applying special validation")
+            logger.debug("This is a system route - applying special validation")
             # For system routes, only allow updating icon, description, and order
             if route_data.name is not None and route_data.name != route.name:
-                print("Cannot change name for system routes")
+                logger.warning("Cannot change name for system routes")
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail="Cannot change name for system routes"
                 )
             if route_data.route is not None and route_data.route != route.route:
-                print("Cannot change route path for system routes")
+                logger.warning("Cannot change route path for system routes")
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail="Cannot change route path for system routes"
                 )
         
-        print("Saving route changes to database")
-        await route.save(db)
+        logger.debug("Saving route changes to database")
         await route.save(db)
         
         # Convert SQLAlchemy model instance to dictionary
@@ -562,11 +570,11 @@ async def delete_navigation_route(
         # Convert route_id to string if it's a UUID
         route_id_str = str(route_id).replace('-', '')
         
-        print(f"Attempting to delete route with ID: {route_id_str}")
+        logger.info(f"Attempting to delete route with ID: {route_id_str}")
         
         # Get existing route using raw SQL to avoid ORM issues
-        query = text(f"SELECT * FROM navigation_routes WHERE id = '{route_id_str}'")
-        result = await db.execute(query)
+        query = text("SELECT * FROM navigation_routes WHERE id = :route_id")
+        result = await db.execute(query, {"route_id": route_id_str})
         route_data = result.fetchone()
         
         if not route_data:
@@ -574,7 +582,16 @@ async def delete_navigation_route(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Navigation route with ID {route_id} not found"
             )
-        
+
+        # Ownership check: ensure route belongs to current user
+        route_creator_id = str(route_data.creator_id).replace('-', '') if hasattr(route_data, 'creator_id') and route_data.creator_id else ''
+        current_user_id = str(auth.user_id).replace('-', '')
+        if route_creator_id != current_user_id:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Navigation route with ID {route_id} not found"
+            )
+
         # Check if route is a system route
         is_system_route = route_data.is_system_route if hasattr(route_data, 'is_system_route') else False
         if is_system_route:
@@ -584,8 +601,8 @@ async def delete_navigation_route(
             )
         
         # Check if route has associated pages using raw SQL
-        pages_query = text(f"SELECT COUNT(*) FROM pages WHERE navigation_route_id = '{route_id_str}'")
-        pages_result = await db.execute(pages_query)
+        pages_query = text("SELECT COUNT(*) FROM pages WHERE navigation_route_id = :route_id")
+        pages_result = await db.execute(pages_query, {"route_id": route_id_str})
         page_count = pages_result.scalar()
         
         if page_count > 0:
@@ -595,18 +612,18 @@ async def delete_navigation_route(
             )
         
         # Delete route using raw SQL
-        delete_query = text(f"DELETE FROM navigation_routes WHERE id = '{route_id_str}'")
-        await db.execute(delete_query)
+        delete_query = text("DELETE FROM navigation_routes WHERE id = :route_id")
+        await db.execute(delete_query, {"route_id": route_id_str})
         await db.commit()
         
-        print(f"Successfully deleted route with ID: {route_id_str}")
+        logger.info(f"Successfully deleted route with ID: {route_id_str}")
         
     except HTTPException:
         await db.rollback()
         raise
     except Exception as e:
         await db.rollback()
-        print(f"Error deleting route: {str(e)}")
+        logger.error(f"Error deleting route: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to delete navigation route: {str(e)}"

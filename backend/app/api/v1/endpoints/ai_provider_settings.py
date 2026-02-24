@@ -5,6 +5,8 @@ from fastapi import APIRouter, HTTPException, Depends, Body
 from typing import List, Dict, Any, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
+from app.core.auth_deps import require_user
+from app.core.auth_context import AuthContext
 from app.models.settings import SettingDefinition, SettingScope, SettingInstance
 from app.ai_providers.registry import provider_registry
 from app.schemas.ai_providers import ProviderSettingRequest
@@ -58,12 +60,11 @@ async def ensure_provider_settings_definitions(db: AsyncSession):
 
 @router.get("/providers")
 async def get_provider_settings(
-    user_id: Optional[str] = None,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    auth: AuthContext = Depends(require_user)
 ):
     """Get all provider settings instances."""
-    # Use current user if not specified
-    user_id = user_id or "current"
+    user_id = str(auth.user_id)
     
     # Ensure settings definitions exist
     await ensure_provider_settings_definitions(db)
@@ -97,12 +98,11 @@ async def get_provider_settings(
 @router.post("/providers")
 async def create_provider_setting(
     request: ProviderSettingRequest,
-    user_id: Optional[str] = None,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    auth: AuthContext = Depends(require_user)
 ):
     """Create or update a provider setting."""
-    # Use current user if not specified
-    user_id = user_id or "current"
+    user_id = str(auth.user_id)
     
     # Ensure settings definitions exist
     await ensure_provider_settings_definitions(db)
@@ -150,12 +150,11 @@ async def create_provider_setting(
 async def delete_provider_setting(
     provider: str,
     instance_id: str,
-    user_id: Optional[str] = None,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    auth: AuthContext = Depends(require_user)
 ):
     """Delete a provider setting."""
-    # Use current user if not specified
-    user_id = user_id or "current"
+    user_id = str(auth.user_id)
     
     # Validate provider
     if provider not in provider_registry.get_available_providers():
@@ -184,12 +183,11 @@ async def delete_provider_setting(
 @router.get("/servers/{settings_id}")
 async def get_servers(
     settings_id: str,
-    user_id: Optional[str] = None,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    auth: AuthContext = Depends(require_user)
 ):
     """Get servers from a settings instance."""
-    # Use current user if not specified
-    user_id = user_id or "current"
+    user_id = str(auth.user_id)
     
     # Get settings instance
     setting = await SettingInstance.get_by_id_and_scope(

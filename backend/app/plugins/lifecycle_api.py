@@ -29,6 +29,33 @@ from app.models.plugin import Plugin
 
 logger = structlog.get_logger()
 
+# Maximum plugin file size (50 MB)
+_MAX_PLUGIN_FILE_SIZE = 50 * 1024 * 1024
+
+
+def _validate_plugin_file(path: Path, allowed_root: Path) -> None:
+    """
+    Validate that a plugin file is safe to use.
+
+    Checks:
+      - Path resolves within the allowed plugin directory
+      - Not a symlink escaping the directory
+      - File size under 50 MB
+
+    Raises:
+        ValueError: If validation fails
+    """
+    resolved = path.resolve()
+    root_resolved = allowed_root.resolve()
+    if not str(resolved).startswith(str(root_resolved)):
+        raise ValueError(f"Plugin file path escapes allowed directory: {path}")
+    if path.is_symlink():
+        link_target = path.resolve()
+        if not str(link_target).startswith(str(root_resolved)):
+            raise ValueError(f"Symlink escapes allowed directory: {path} -> {link_target}")
+    if path.exists() and path.stat().st_size > _MAX_PLUGIN_FILE_SIZE:
+        raise ValueError(f"Plugin file exceeds 50 MB limit: {path}")
+
 
 def _log_plugin_audit_background(
     request: Request,

@@ -84,6 +84,8 @@ def _validate_service_token(token: str) -> Optional[str]:
     """
     # Check against configured service tokens
     # Note: Empty tokens are invalid (not configured)
+    if not token or len(token) < 16:
+        return None
     if settings.PLUGIN_RUNTIME_TOKEN and token == settings.PLUGIN_RUNTIME_TOKEN:
         return "plugin_runtime"
     elif settings.JOB_WORKER_TOKEN and token == settings.JOB_WORKER_TOKEN:

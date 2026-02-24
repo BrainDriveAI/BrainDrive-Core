@@ -34,9 +34,9 @@ def _env_file_candidates() -> Tuple[Union[str, Path], ...]:
 class Settings(BaseSettings):
     # Application
     APP_NAME: str = "BrainDrive"
-    APP_ENV: str = "dev"
+    APP_ENV: str = "production"
     API_V1_PREFIX: str = "/api/v1"
-    DEBUG: bool = True
+    DEBUG: bool = False
 
     # Server
     HOST: str = "0.0.0.0"
@@ -90,7 +90,11 @@ class Settings(BaseSettings):
     ALLOWED_HOSTS: List[str] = ["localhost", "127.0.0.1"]
 
     ENCRYPTION_MASTER_KEY: str = ""
-    ENABLE_TEST_ROUTES: bool = True
+    ENABLE_TEST_ROUTES: bool = False
+    ADMIN_SECRET_KEY: str = ""
+    SEARXNG_BASE_URL: str = "http://localhost:8888"
+    ALLOW_REGISTRATION: bool = True
+    ENABLE_API_DOCS: bool = True
     CORS_METHODS: List[str] = ["GET", "POST", "PUT", "DELETE", "OPTIONS", "HEAD"]
     CORS_HEADERS: List[str] = ["Authorization", "Content-Type", "Accept", "Origin", "X-Requested-With"]
     @field_validator("CORS_ORIGINS", "CORS_EXPOSE_HEADERS", "CORS_DEV_HOSTS", mode="before")

@@ -32,7 +32,8 @@ async def install_python_service(service: dict, target_dir: Path):
     
     # Install dependencies
     logger.info(f"Installing dependencies for {name}")
-    install_cmd = [str(venv_python)] + install_command.split()
+    import shlex
+    install_cmd = [str(venv_python)] + shlex.split(install_command)
     result = subprocess.run(install_cmd, cwd=target_dir,
                             capture_output=True, text=True)
     if result.returncode != 0:
@@ -41,7 +42,7 @@ async def install_python_service(service: dict, target_dir: Path):
     
     # Start service
     logger.info(f"Starting service {name}")
-    start_cmd = [str(venv_python)] + start_command.split()
+    start_cmd = [str(venv_python)] + shlex.split(start_command)
     proc = subprocess.Popen(start_cmd, cwd=target_dir,
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     

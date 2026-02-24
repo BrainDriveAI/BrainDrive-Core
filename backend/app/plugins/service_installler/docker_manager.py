@@ -14,13 +14,14 @@ async def _run_docker_compose_command(command: str, cwd: Path):
     Run a Docker Compose command and log its output.
     Uses asyncio.to_thread for non-blocking I/O.
     """
+    import shlex
     logger.info("Executing Docker Compose command", command=command, cwd=str(cwd))
 
     def _execute():
-        # Execute the command in the specified directory
+        # Execute the command in the specified directory (no shell=True for safety)
         return subprocess.run(
-            command,
-            shell=True,
+            shlex.split(command),
+            shell=False,
             cwd=str(cwd),
             capture_output=True,
             text=True,

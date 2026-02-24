@@ -30,7 +30,22 @@ class UniversalEncryptionService:
     def __init__(self):
         self.backend = default_backend()
         self._master_key = None
-        self._salt = b'BrainDrive2025'  # Static salt for key derivation
+        self._salt = self._derive_salt()
+
+    @staticmethod
+    def _derive_salt() -> bytes:
+        """Derive salt from master key via HMAC-SHA256."""
+        import hmac
+        import hashlib
+        master_key_str = settings.ENCRYPTION_MASTER_KEY or os.getenv('ENCRYPTION_MASTER_KEY', '')
+        if not master_key_str:
+            raise EncryptionError(
+                "ENCRYPTION_MASTER_KEY is not set. Cannot derive encryption salt. "
+                "Please set ENCRYPTION_MASTER_KEY to a secure random string."
+            )
+        return hmac.new(
+            master_key_str.encode(), b'BrainDrive-Salt-Derivation', hashlib.sha256
+        ).digest()[:16]
         
     def _get_master_key(self) -> bytes:
         """Get or derive the master encryption key"""

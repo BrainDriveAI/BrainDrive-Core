@@ -69,16 +69,16 @@ class PluginStorageManager:
             raise
 
     async def _extract_archive(self, archive_path: Path, target_path: Path):
-        """Extract archive file to target directory"""
+        """Extract archive file to target directory with path traversal protection."""
         try:
             if archive_path.suffix == '.gz' and archive_path.stem.endswith('.tar'):
                 import tarfile
                 with tarfile.open(archive_path, 'r:gz') as tar:
-                    tar.extractall(target_path)
+                    self._safe_extract_tar(tar, target_path)
             elif archive_path.suffix == '.zip':
                 import zipfile
                 with zipfile.ZipFile(archive_path, 'r') as zip_file:
-                    zip_file.extractall(target_path)
+                    self._safe_extract_zip(zip_file, target_path)
             else:
                 raise ValueError(f"Unsupported archive format: {archive_path.suffix}")
 
@@ -87,6 +87,34 @@ class PluginStorageManager:
         except Exception as e:
             logger.error(f"Error extracting archive {archive_path}: {e}")
             raise
+
+    @staticmethod
+    def _safe_extract_tar(tar: "tarfile.TarFile", target_path: Path):
+        """Extract tar safely, rejecting entries that escape the target directory."""
+        import tarfile
+        resolved_target = target_path.resolve()
+        for member in tar.getmembers():
+            member_path = (target_path / member.name).resolve()
+            if not str(member_path).startswith(str(resolved_target)):
+                raise ValueError(f"Path traversal detected in tar member: {member.name}")
+            if member.issym() or member.islnk():
+                link_target = Path(member.linkname)
+                if link_target.is_absolute():
+                    raise ValueError(f"Absolute symlink in tar: {member.name} -> {member.linkname}")
+                resolved_link = (target_path / member.name).parent.joinpath(link_target).resolve()
+                if not str(resolved_link).startswith(str(resolved_target)):
+                    raise ValueError(f"Symlink escape in tar: {member.name} -> {member.linkname}")
+        tar.extractall(target_path)
+
+    @staticmethod
+    def _safe_extract_zip(zip_file: "zipfile.ZipFile", target_path: Path):
+        """Extract zip safely, rejecting entries that escape the target directory."""
+        resolved_target = target_path.resolve()
+        for info in zip_file.infolist():
+            member_path = (target_path / info.filename).resolve()
+            if not str(member_path).startswith(str(resolved_target)):
+                raise ValueError(f"Path traversal detected in zip member: {info.filename}")
+        zip_file.extractall(target_path)
 
     async def register_user_plugin(self, user_id: str, plugin_slug: str, version: str, shared_path: Path, metadata: Dict[str, Any]) -> bool:
         """Register plugin installation for user with minimal metadata (database holds main info)"""

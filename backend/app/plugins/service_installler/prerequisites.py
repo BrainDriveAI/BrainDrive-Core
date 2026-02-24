@@ -71,6 +71,8 @@ def write_env_file(target_dir: Path, env_vars: dict, required_vars: list):
             for var_name in required_vars:
                 var_value = env_vars.get(var_name, "")
                 f.write(f"{var_name}={var_value}\n")
+        # Restrict file permissions to owner-only (contains secrets)
+        os.chmod(env_path, 0o600)
     except Exception as e:
         logger.error(f"Failed to create .env file for service: {e}")
         raise RuntimeError(f"Failed to create .env file for service: {e}")
