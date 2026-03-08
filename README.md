@@ -1,4 +1,4 @@
-> ⚠️ **This repository has been archived.** BrainDrive has evolved into the [Personal AI Architecture](https://personalaiarchitecture.org) — an MIT-licensed, open architecture for building personal AI systems with zero lock-in. See the [new repo](https://github.com/Personal-AI-Architecture/the-architecture) for the latest work.
+> ⚠️ **This repository has been archived.** BrainDrive is building a new personal AI system on top of the [Personal AI Architecture](https://personalaiarchitecture.org) — an MIT-licensed, open architecture with zero lock-in. See the [architecture repo](https://github.com/Personal-AI-Architecture/the-architecture) for the foundation, and visit [braindrive.ai](https://braindrive.ai) for updates.
 
 ---
 
